@@ -1,4 +1,4 @@
-package FolderFastSync;
+package Servidores.FolderFastSync;
 
 public class FFSync {
     public static void main(String[] args) {
