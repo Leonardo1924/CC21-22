@@ -1,221 +1,259 @@
 package FFSync;
 
 import org.javatuples.Pair;
+import org.javatuples.Triplet;
 
 import javax.xml.crypto.Data;
-import java.io.File;
 import java.io.IOException;
-import java.math.BigInteger;
-import java.net.DatagramPacket;
-import java.net.InetAddress;
-import java.net.UnknownHostException;
-import java.nio.ByteBuffer;
+import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class FTrapid {
 
-    private InetAddress friend_ip;
-    private List<String> filenames;
-    private static final int PORT = 8080;
+    private String folder_path;
+    private Folder folder;
+    private InetAddress ip;
+    private ServerChannel channel;
+    private List<String> friend_files;
 
-    public FTrapid(String ip, String path) throws IOException {
+        private int ticket;                     // Sistema de tickets
+        private Lock locker;                    // Lock
 
-        this.friend_ip = InetAddress.getByName(ip);
-        this.filenames = this.uploadFilenames(path);
+    /**
+     * Constructor
+     */
+    public FTrapid(String path, String ip) throws UnknownHostException, SocketException {
+
+        this.folder_path = path;                                        // folder path
+        this.folder = new Folder(path);                                 // folder
+        this.ip = InetAddress.getByName(ip);                            // ip from friend
+        this.friend_files = new ArrayList<>();
+        this.channel = new ServerChannel(this, this.ip);         // connection channel
+
+
+        this.ticket = 1;
+        this.locker = new ReentrantLock();
     }
 
     /**
-     * Carrega os nomes das files no path especificado
-     * @param path
+     * Gets a unique ticket
      * @return
      */
-    private List<String> uploadFilenames(String path) {
+    public int getTicket(){
 
-        List<String> names = new ArrayList<>();
-        File folder = new File(path);
-        File[] files = folder.listFiles();
-        if(files == null) return null;
-        for(File f : files) {
-            names.add(f.getName());
+        try {
+            this.locker.lock();
+            int ticket = this.ticket;
+            this.ticket += 1;
+            return ticket;
+        } finally {
+            this.locker.unlock();
         }
-        return names;
     }
 
-    /**
-     * Get do nome das files dos ficheiros presentes no path
-     * @return
-     */
-    public List<String> getFilenames(){ return new ArrayList<>(this.filenames);}
 
-    /**
-     * Envia todos os filenames presentes no path especificado
-     * @param channel
-     * @throws IOException
-     */
-    public void sendFileNames(Channel channel) throws IOException {
+    public ServerChannel getChannel(){ return this.channel;}
 
-        int block = 1;
-        List<DatagramPacket> d = new ArrayList<>();
+    public Folder getFolder(){return this.folder;}
 
-        for(String s : this.filenames){
+    public void loadFriendFiles(List<byte[]> files){
 
-            d.add(this.DATA(block, s.getBytes(StandardCharsets.UTF_8)));
-            block++;
+        for(byte[] b : files){
+            this.friend_files.add(new String(b, StandardCharsets.UTF_8));
         }
-
-        channel.sendWRQ("filenames", d.size());
-        channel.sendFile(d);
     }
 
+    public List<String> getFriend_files(){
 
-    /**
-     * Retirar a informação útil de um ACK
-     * @param ackpacket
-     * @return
-     */
-    public Pair<Integer,Integer> readACK(DatagramPacket ackpacket){
-
-        byte[] ack = ackpacket.getData();
-
-        ByteBuffer a = ByteBuffer.allocate(ack.length);
-        a.put(ack,0,ack.length);
-        a.position(0);
-        int opcode = a.getInt();
-        int block = a.getInt();
-
-        return new Pair<>(opcode, block);
-    }
-
-    /**
-     * Criar um ACK
-     * @param block
-     * @return
-     */
-    public DatagramPacket ACK(int block){
-
-        // ( [opcode] [block])
-        // integer : 4 bytes
-        ByteBuffer ack_pack = ByteBuffer.allocate(8);
-        ack_pack.putInt(4);
-        ack_pack.putInt(block);
-        ack_pack.position(0);
-
-        byte[] data = ack_pack.array();
-        return new DatagramPacket(data, data.length, friend_ip, PORT);
-    }
-
-
-    /**
-     * Retirar a informação útil de um RQ
-     * @param packet
-     * @return
-     */
-    public Pair<Integer, String> readRQ(DatagramPacket packet){
-
-        byte[] data = packet.getData();
-        ByteBuffer RQ = ByteBuffer.allocate(data.length);
-        RQ.put(data, 0, data.length);
-        RQ.position(0);
-        RQ.getInt(); // opcode
-        int nblocks = RQ.getInt(); // number of blocks
-        byte[] filename = new byte[RQ.limit()-12];
-        RQ.get(filename, 0, RQ.limit()-12);
-
-        return new Pair<>(nblocks, new String(filename, StandardCharsets.UTF_8));
-    }
-
-    /**
-     * Criação de um RQ
-     * @param rq
-     * @param n_blocks
-     * @param file
-     * @return
-     */
-    public DatagramPacket RQ(int rq, int n_blocks, String file){
-
-        // ( [opcode] [nblocks] [filename] [0] )
-
-        byte[] filename = file.getBytes(StandardCharsets.UTF_8);
-
-        ByteBuffer RQ = ByteBuffer.allocate(4+4+filename.length+4);
-        RQ.putInt(rq);
-        RQ.putInt(n_blocks);
-        RQ.put(filename);
-        RQ.putInt(0);
-        RQ.position(0);
-
-        byte[] data = RQ.array();
-        return new DatagramPacket(data, data.length, friend_ip, PORT);
-    }
-
-    /**
-     * Retirar informação útil de um DATA
-     * @param packet
-     * @return
-     */
-    public Pair<Integer, byte[]> readDATA(DatagramPacket packet){
-
-        byte[] data = packet.getData();
-        ByteBuffer buffer = ByteBuffer.allocate(data.length);
-        buffer.put(data, 0, data.length);
-        buffer.position(0);
-
-        buffer.getInt();
-        int block = buffer.getInt();
-        int size = buffer.getInt();
-
-        byte[] realData = new byte[size];
-        buffer.get(realData, 0, realData.length);
-
-        return new Pair<>(block, realData);
-    }
-
-    /**
-     * Criação de um DATA
-     * @param block
-     * @param data
-     * @return
-     */
-    public DatagramPacket DATA(int block, byte[] data){
-
-        // ( [opcode] [nblock] [datasize] [data] ) 512 (4 + 4 + 4 + 500)
-
-        ByteBuffer buffer = ByteBuffer.allocate(12+data.length);
-        if(buffer.limit() > 500){
+        if(this.friend_files.size() == 0){
+            System.out.println("error: You don't have any record on your friend's files!");
             return null;
         }
-
-        buffer.putInt(3);
-        buffer.putInt(block);
-        buffer.putInt(data.length);
-        buffer.put(data);
-        byte[] datapacket = buffer.array();
-        return new DatagramPacket(datapacket, datapacket.length, friend_ip, PORT);
-    }
-
-    /**
-     * Retirar o OPCODE de um PACKET
-     * @param packet
-     * @return
-     */
-    public int getDatagramOpcode(DatagramPacket packet){
-
-        byte[] data = packet.getData();
-        ByteBuffer buffer = ByteBuffer.allocate(4);
-        buffer.put(data, 0, 4);
-        buffer.position(0);
-
-        return buffer.getInt();
+        return new ArrayList<>(this.friend_files);
     }
 
 
+    public void exit(){
+
+        System.out.println("Closing socket...");
+        this.channel.getSocket().close();
+        System.out.println("Socket closed, leaving...");
+    }
+
+        // AQUI - MTU procurar, o ip vai fragmentar os packets, procurar o tamanho correto para usar
+
+
+
+    static class Sender implements Runnable{
+
+        private FTrapid ftr;
+        private DatagramSocket socket;
+        private InetAddress ip;
+        private String file;
+        private int ficha;
+
+
+        public Sender(FTrapid ftr, String file){
+
+            this.ftr = ftr;
+            this.socket = ftr.channel.getSocket();
+            this.ip = ftr.channel.getIP();
+            this.file = file;
+            this.ficha = ftr.getTicket();
+        }
+
+
+        public Triplet<Integer,Integer,String> getConexao(String file) throws IOException {
+
+            // O getConexão tem de enviar um pedido de RRQ e, consoante a resposta recebida, tratá-la.
+
+            DatagramPacket RRQ = Datagrams.RRQ(this.ip, file, this.ficha);      // pedido RRQ
+
+
+            // enquanto não receber uma resposta, devo continuar a enviá-lo
+            byte[] answerbuff = new byte[1024]; //no max
+            DatagramPacket answerPacket = new DatagramPacket(answerbuff, answerbuff.length);
+            this.socket.setSoTimeout(5000);
+
+            while(true){
+
+                // enviar o RRQ
+                this.socket.send(RRQ);
+
+                try{
+
+                    // esperar por uma resposta : WRQ, RRQ, ERROR
+                    this.socket.receive(answerPacket);
+
+                    int received_opcode = Datagrams.getDatagramOpcode(answerPacket);
+                    int received_ficha = Datagrams.getDatagramFicha(answerPacket);
+                    System.out.println("[opcode "+received_opcode+"], [ficha "+received_ficha+"]");
+
+                    // recebi um WRQ e é para este mesmo pedido
+                    if(received_opcode == 2 && received_ficha == this.ficha){
+
+                        System.out.println("confirmed wrq for ficha " + received_ficha);
+                        // Se me querem escrever, vou aceitar
+                        RRQ = Datagrams.ACK(this.ip, this.ficha, 0);
+                        this.socket.send(RRQ); // this is ack 0
+                        this.socket.send(RRQ);
+                        return Datagrams.readWRQ(answerPacket);
+                    }
+
+                    // Se eu receber um RRQ, esse já vai ter outra ficha associada e é o servidor que o vai tratar...
+
+                    // se eu receber um ERROR,
+                    else if(received_opcode == 5 && received_ficha == this.ficha){
+
+                        System.out.println("error: received error from your friend");
+                        // o amigo não tinha a file
+                        return null;
+                    }
+                }
+                catch (SocketTimeoutException e){
+
+                    this.socket.send(RRQ);
+                }
+            }
+        }
 
 
 
 
 
+        @Override
+        public void run() {
+
+            try {
+                // Get conection and receive info about transfer
+                Triplet<Integer,Integer,String> wrq_info = this.getConexao(this.file);
+                System.out.println("got out of getconexao");
+
+                if(wrq_info == null) return;
+
+                int nblocks = wrq_info.getValue1();
+                this.ficha = wrq_info.getValue0();
+                this.socket.send(Datagrams.ACK(ip, this.ficha, 0));
+                //System.out.println("get conexao left");
+
+                // receiving datas
+                byte[] databuff = new byte[1024];
+                DatagramPacket datapacket = new DatagramPacket(databuff, databuff.length);
+                DatagramPacket ack = Datagrams.ACK(this.ip, this.ficha, 0);
+                int current_block = 1;
+
+                List<byte[]> answer = new ArrayList<>();
+                this.socket.setSoTimeout(4000);
+
+                while(true){
+
+                    if(current_block == nblocks+1){
+
+                        socket.send(ack);
+                        System.out.println("Received everything...");
+                        socket.send(ack);
+
+                        for(byte[] b : answer){
+
+                            System.out.println(new String(b, StandardCharsets.UTF_8));
+                        }
+
+                        if(wrq_info.getValue2().equals("#filenames#")){
+
+                            ftr.loadFriendFiles(answer);
+                        }
+                        else{
+                            System.out.println("Updating file...");
+                            this.ftr.folder.updateFile(wrq_info.getValue2(), answer, wrq_info.getValue0(), this.ip);
+                        }
+                        return;
+                    }
+
+                    socket.send(ack);
+                    try {
+                        socket.receive(datapacket);
+                        int received_opcode = Datagrams.getDatagramOpcode(datapacket);
+
+                        if (received_opcode == 3) {
+
+                            Triplet<Integer, Integer, byte[]> data_info = Datagrams.readDATA(datapacket);
+
+                            int ficha = data_info.getValue0();
+                            int bloco = data_info.getValue1();
+                            System.out.println("[3] ficha ["+ficha+"] bloco ["+bloco+"]");
+                            if (ficha == this.ficha && bloco == current_block) {
+
+                                answer.add(data_info.getValue2());
+                                ack = Datagrams.ACK(this.ip, this.ficha, current_block);
+                                socket.send(ack);
+                                current_block++;
+                            } else {
+                                // se não é o que quero, pode fazer falta a alguém
+                                this.ftr.channel.resend(datapacket);
+                            }
+                        }
+                    } catch (SocketTimeoutException e){
+                        System.out.println("Timeout trying to receive data");
+                        if(current_block == nblocks+1) {
+                            return;
+                        }
+                        socket.send(ack);
+                    }
+                }
+
+
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+
+
+
+        }
+    }
 
 
 
