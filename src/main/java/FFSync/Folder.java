@@ -37,9 +37,16 @@ public class Folder {
         File[] files = folder.listFiles();
         if(files == null) return;
         for(File f : files) {
-            this.filenames.add(f.getName());
+            if(!this.filenames.contains(f.getName()))
+                this.filenames.add(f.getName());
         }
     }
+
+    public void updateFolder(){
+
+        this.storeFilenames();
+    }
+
 
     /**
      * Devolve o path do folder
@@ -146,7 +153,7 @@ public class Folder {
             // Se o bloco contiver mais que o máximo pré-definido ( 1024 - 4 - 4 - 4 - 4 = 1008)
             if(currentLength > size){
                 byte[] aux = new byte[size];
-                auxBuffer.get(aux, current_index, size-1);
+                auxBuffer.get(aux, 0, size);
                 DatagramPacket packet = Datagrams.DATA(ip, ficha, currentblock, aux);
                 answer.add(packet);
                 current_index += size;
@@ -156,7 +163,7 @@ public class Folder {
             else{
                 // Se for o último bloco, terá o próprio tamanho
                 byte[] aux = new byte[currentLength];
-                auxBuffer.get(aux, current_index, currentLength);
+                auxBuffer.get(aux, 0, currentLength);
                 DatagramPacket packet = Datagrams.DATA(ip, ficha, currentblock, aux);
                 answer.add(packet);
             }

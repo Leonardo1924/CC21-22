@@ -1,6 +1,7 @@
 package FFSync;
 
 import org.javatuples.Pair;
+import org.javatuples.Quartet;
 import org.javatuples.Triplet;
 
 import javax.xml.crypto.Data;
@@ -8,7 +9,10 @@ import java.io.IOException;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -20,8 +24,12 @@ public class FTrapid {
     private ServerChannel channel;
     private List<String> friend_files;
 
-        private int ticket;                     // Sistema de tickets
-        private Lock locker;                    // Lock
+    private int ticket;                     // Sistema de tickets
+    private final Lock locker;                    // Lock
+
+                //ficha         file    updated?
+    private Map<Integer, Quartet<String, Boolean, Long, Long>> requests_done;
+
 
     /**
      * Constructor
@@ -37,7 +45,15 @@ public class FTrapid {
 
         this.ticket = 1;
         this.locker = new ReentrantLock();
+
+        this.requests_done = new HashMap<>();
     }
+
+    public Map<Integer, Quartet<String,Boolean, Long,Long>> getRequests_done(){
+        return new HashMap<>(this.requests_done);
+    }
+
+
 
     /**
      * Gets a unique ticket
@@ -117,7 +133,7 @@ public class FTrapid {
             // enquanto não receber uma resposta, devo continuar a enviá-lo
             byte[] answerbuff = new byte[1024]; //no max
             DatagramPacket answerPacket = new DatagramPacket(answerbuff, answerbuff.length);
-            this.socket.setSoTimeout(5000);
+            this.socket.setSoTimeout(3000);
 
             while(true){
 
@@ -140,7 +156,6 @@ public class FTrapid {
                         // Se me querem escrever, vou aceitar
                         RRQ = Datagrams.ACK(this.ip, this.ficha, 0);
                         this.socket.send(RRQ); // this is ack 0
-                        this.socket.send(RRQ);
                         return Datagrams.readWRQ(answerPacket);
                     }
 
@@ -187,7 +202,10 @@ public class FTrapid {
                 int current_block = 1;
 
                 List<byte[]> answer = new ArrayList<>();
-                this.socket.setSoTimeout(4000);
+                this.socket.setSoTimeout(3000);
+
+                long total_bytes = 0;
+                long start = System.nanoTime();
 
                 while(true){
 
@@ -196,9 +214,11 @@ public class FTrapid {
                         socket.send(ack);
                         System.out.println("Received everything...");
                         socket.send(ack);
+                        long finish = System.nanoTime();
 
                         for(byte[] b : answer){
 
+                            total_bytes += b.length;
                             System.out.println(new String(b, StandardCharsets.UTF_8));
                         }
 
@@ -208,8 +228,15 @@ public class FTrapid {
                         }
                         else{
                             System.out.println("Updating file...");
-                            this.ftr.folder.updateFile(wrq_info.getValue2(), answer, wrq_info.getValue0(), this.ip);
+                            boolean updated = this.ftr.folder.updateFile(wrq_info.getValue2(), answer, wrq_info.getValue0(), this.ip);
+                            long milliseconds = TimeUnit.NANOSECONDS.toMillis(finish-start);
+                            if(milliseconds == 0) milliseconds = (long)1;
+                            this.ftr.requests_done.put(this.ficha,
+                                    new Quartet<>(this.file, updated
+                                            , milliseconds
+                                            , total_bytes));
                         }
+                        this.ftr.channel.garbageCollector(this.file, this.ficha);
                         return;
                     }
 
@@ -239,18 +266,22 @@ public class FTrapid {
                     } catch (SocketTimeoutException e){
                         System.out.println("Timeout trying to receive data");
                         if(current_block == nblocks+1) {
+                            long finish = System.nanoTime();
+                            boolean updated = this.ftr.folder.updateFile(wrq_info.getValue2(), answer, wrq_info.getValue0(), this.ip);
+                            this.ftr.channel.garbageCollector(this.file, this.ficha);
+                            Long milliseconds = TimeUnit.NANOSECONDS.toMillis(finish-start);
+                            this.ftr.requests_done.put(this.ficha,
+                                    new Quartet<>(this.file, updated
+                                            , milliseconds
+                                            , total_bytes));
                             return;
                         }
                         socket.send(ack);
                     }
                 }
-
-
             } catch (IOException e) {
                 e.printStackTrace();
             }
-
-
 
         }
     }

@@ -1,12 +1,15 @@
 package FFSync;
 
 import org.javatuples.Pair;
+import org.javatuples.Quartet;
+import org.javatuples.Triplet;
 
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.List;
+import java.util.Map;
 
 public class FFSync {
 
@@ -23,6 +26,10 @@ public class FFSync {
 
             if (input.equals("sync_filenames")) {
                 command = 3;
+            }
+            else if(input.equals("requests_done"))
+            {
+                command = 7;
             } else if (input.equals("friend_files")) {
                 command = 4;
             } else if (input.equals("full_sync")) {
@@ -129,7 +136,7 @@ public class FFSync {
                 List<String> filenames = ftr.getFolder().getFilenames();
                 int nfiles = filenames.size();
 
-                for(int i = 0; i < 2; i+=2){
+                for(int i = 0; i < nfiles; i+=2){
                     Thread t1, t2 = null;
                     t1 = new Thread(new FTrapid.Sender(ftr, filenames.get(i)));
                     System.out.println("starting thread for file " + filenames.get(i));
@@ -175,6 +182,8 @@ public class FFSync {
                 senderthread.join();
                 System.out.println("\n\\-----Ended getConexao-----/");
 
+                ftr.getFolder().updateFolder();
+
             }
             else if (command == 4) {
                 // Print friend's files
@@ -190,7 +199,19 @@ public class FFSync {
             }
             else if(command == 6){
 
+                ftr.getFolder().updateFolder();
                 System.out.println(ftr.getFolder().getFilenames());
+            }
+            else if(command == 7){
+
+                for(Map.Entry<Integer, Quartet<String,Boolean,Long,Long>> e : ftr.getRequests_done().entrySet()){
+
+                    System.out.println("Requested sync for : \""+e.getValue().getValue0()
+                            + "\", needed update? : \"" + e.getValue().getValue1()
+                            + "\", ms: " + e.getValue().getValue2()
+                            + ", bytes: " + e.getValue().getValue3()
+                            + ", debit: " + (e.getValue().getValue3() * 8)/e.getValue().getValue2() + " bps");
+                }
             }
         }
     }
