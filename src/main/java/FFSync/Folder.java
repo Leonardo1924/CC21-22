@@ -15,17 +15,17 @@ import java.util.List;
 
 public class Folder {
 
-    private String path;
-    private List<String> filenames;
+    private String path;                                // FOLDER PATH
+    private List<String> filenames;                     // FOLDER FILES
 
     /**
      * Constructor
      */
     public Folder(String path){
 
-        this.path = path;
-        this.filenames = new ArrayList<>();
-        this.storeFilenames();
+        this.path = path;                               // path
+        this.filenames = new ArrayList<>();             // filenames
+        this.storeFilenames();                          // função que dá load dos filenames
     }
 
     /**
@@ -42,18 +42,12 @@ public class Folder {
         }
     }
 
+    /**
+     * Atualiza a lista de nomes presentes no folder
+     */
     public void updateFolder(){
 
         this.storeFilenames();
-    }
-
-
-    /**
-     * Devolve o path do folder
-     * @return
-     */
-    public String getPath() {
-        return path;
     }
 
     /**
@@ -231,7 +225,4 @@ public class Folder {
         }
         fos.close();
     }
-
-
-
 }

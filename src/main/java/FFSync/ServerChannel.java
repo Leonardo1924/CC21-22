@@ -16,34 +16,51 @@ import java.util.concurrent.locks.ReentrantLock;
 public class ServerChannel implements Runnable {
 
     // ----------------------------------------------------------------------
-    private InetAddress ip;                 // ip para onde irei enviar info
-    private final static int PORT = 8080;   // porta onde estou à escuta
-    private DatagramSocket socket;          // Socket de comunicação
-    private Folder folder;
-    private FTrapid ftr;
+        private InetAddress ip;                 // IP para o qual enviarei coisas
+        private final static int PORT = 8080;   // Porta na qual estou à escuta
+        private DatagramSocket socket;          // Socket de comunicação
+        private FTrapid ftr;                    // FTrapid
     // ----------------------------------------------------------------------
 
     // ----------------------------------------------------------------------
-
-    private Map<String, Integer> current_threads;       // file, ficha
+        private Map<String, Integer> current_threads;      // Threads já iniciadas, Map<Filename, Token>
     // ----------------------------------------------------------------------
-
-
-    public boolean hasThread(int ficha){
-
-        return this.current_threads.containsValue(ficha);
-    }
 
 
     /**
+     * Constructor
+     */
+    public ServerChannel(FTrapid ftr, InetAddress ip) throws SocketException {
+
+        this.ip = ip;                                   // IP
+        this.ftr = ftr;                                 // FTR
+        this.socket = new DatagramSocket(PORT);         // SOCKET
+        this.current_threads = new HashMap<>();         // CURRENT THREADS
+    }
+
+    /**
+     * Returns destination's IP address
+     * @return
+     */
+    public InetAddress getIP() {
+        return this.ip;
+    }
+
+    /**
+     * Returns server's socket
+     * @return
+     */
+    public DatagramSocket getSocket() {
+        return this.socket;
+    }
+
+    /**
      * Returns a list of already requested files
-     *
      * @return
      */
     public List<String> getServerRequestedFiles() {
 
         List<String> a = new ArrayList<>();
-
         for (Map.Entry<String, Integer> e : current_threads.entrySet()) {
 
             if (!e.getKey().equals("#filenames#"))
@@ -52,94 +69,27 @@ public class ServerChannel implements Runnable {
         return a;
     }
 
-
+    /**
+     * Reenvia para si mesmo um datagrama que havia recebido previamente
+     * @param dp
+     * @throws IOException
+     */
     public void resend(DatagramPacket dp) throws IOException {
 
         this.socket.send(new DatagramPacket(dp.getData(), dp.getData().length, dp.getAddress(), PORT));
     }
 
 
-    public void garbageCollector(int ficha) throws IOException {
-
-        // A ideia do Garbage Collector é recolher os packets "lixo" que a rede tem
-        // No ato da transferência há pacotes duplicados que ficam em circulação enquanto ninguém os recolher
-
-        byte[] garbage_buff = new byte[1024];
-        DatagramPacket garbage = new DatagramPacket(garbage_buff, garbage_buff.length);
-
-        this.socket.setSoTimeout(3000);
-        int timeouts = 0;
-        System.out.println("started garbage collector for ficha " + ficha);
-        while(true) {
-
-            try {
-                this.socket.receive(garbage);
-                int received_ficha = Datagrams.getDatagramFicha(garbage);
-                if (received_ficha == ficha) {
-                    // garbage
-                }
-                // Se não for lixo, vou querer mantê-lo a circular
-                else if (!this.ftr.isSync(received_ficha)) {
-                    this.ftr.getChannel().resend(garbage);
-                }
-            } catch (SocketTimeoutException e) {
-
-                timeouts++;
-                // quando não receber nada por 3 ciclos, é provável que já não haja mais lixo
-                if (timeouts == 2) {
-                    System.out.println("left garbage from thread [" + ficha + "]");
-                    return;
-                }
-            }
-        }
-    }
-
-
     /**
-     * Constructor
+     * SERVER RUN
      */
-    public ServerChannel(FTrapid ftr, InetAddress ip) throws SocketException {
-
-        this.ip = ip;
-        this.ftr = ftr;
-        this.socket = new DatagramSocket(PORT);
-        this.folder = ftr.getFolder();
-        this.current_threads = new HashMap<>();
-    }
-
-    public InetAddress getIP() {
-        return this.ip;
-    }
-
-    /**
-     * Returns server's socket
-     *
-     * @return
-     */
-    public DatagramSocket getSocket() {
-        return this.socket;
-    }
-
-
-    public void sendMessage(String msg) throws IOException {
-
-        System.out.println("Sending message to " + this.ip + ", port no. " + PORT);
-
-        byte[] Msg = msg.getBytes(StandardCharsets.UTF_8);
-        this.socket.send(new DatagramPacket(Msg, Msg.length, this.ip, PORT));
-    }
-
-
     public void run() {
+
         // O servidor vai apanhar packets de, no máximo, 1024 bytes
         byte[] receivingbuff = new byte[1024];
         DatagramPacket receivingPacket = new DatagramPacket(receivingbuff, receivingbuff.length);
-        try {
-            this.socket.setSoTimeout(1000);
-        } catch (SocketException e) {
-            e.printStackTrace();
-        }
 
+        // Enquanto estiver vivo,
         while (true) {
 
             try {
@@ -149,8 +99,8 @@ public class ServerChannel implements Runnable {
                 int received_opcode = Datagrams.getDatagramOpcode(receivingPacket);
                 int received_ficha = Datagrams.getDatagramFicha(receivingPacket);
 
-
-                if (received_opcode == 1) {                  // Se for recebido um READ REQUEST [1]
+                // Se for recebido um READ REQUEST [1]
+                if (received_opcode == 1) {
                     // ( [opcode] [ficha] [filenameSIZE] [filename] [0] )
 
                     // Info do RRQ
@@ -162,17 +112,20 @@ public class ServerChannel implements Runnable {
                     if (!this.current_threads.containsValue(received_ficha)) {
 
                         // Pedido #FILENAMES#
-
                         if (file.equals("#filenames#")) {
                             this.current_threads.put(file, ficha);
 
                             Thread filenames_request = new Thread(new Receiver(this.ftr, file, ficha));
                             filenames_request.start();
                         }
+
                         // Pedido NORMAL
                         else {
                             // Se ainda não tiver havido algum pedido sobre a FILE, executá-lo
                             if(!this.current_threads.containsKey(file)) {
+
+                                // Se a file não existir, cortar logo a tentativa de transferência
+                                // Se a file existir, proceder
                                 // Atualizar o mapa que faz o registo dos pedidos já efetuados
                                 this.current_threads.put(file, ficha);
 
@@ -182,28 +135,29 @@ public class ServerChannel implements Runnable {
 
                             // Se já tiver sido efetuado um pedido sobre a file, ignorar
                             else{
-
                                 this.socket.send(Datagrams.ERROR(this.ip, ficha, 1));
                             }
                         }
+
                         // Para atualizar o número do TICKET em AMBOS OS LADOS
                         this.ftr.getTicket();
-                    } else {
+                    }
+                    else {
 
                         // Se não for um pedido novo,
                         // só o vou querer "receber" se esse pedido ainda não tiver terminado...
-                        if (!this.ftr.isSync(file)) {
+                        if (!this.ftr.hasFailed(ficha) && !this.ftr.isSync(file)) {
                             this.resend(receivingPacket);
                         }
                     }
-                } else {
+                }
+                else {
 
                     // Se não for um pedido RRQ,
-                    // só o vou querer receber SE: já há uma thread sobre ele
+                    // só o vou querer receber SE: Ele não registou erro
                     //                         SE: essa thread ainda não terminou
 
-                    if (this.current_threads.containsValue(received_ficha) && !this.ftr.isSync(received_ficha)) {
-
+                    if (!this.ftr.hasFailed(received_ficha) && !this.ftr.isSync(received_ficha)) {
                         this.resend(receivingPacket);
                     }
                 }
@@ -212,37 +166,38 @@ public class ServerChannel implements Runnable {
                 if(this.socket.isClosed()){
                     return;
                 }
-                //System.out.println("main timeout wtf dude");
             }
         }
     }
 
 
-    // -------------------------------------------------------- Thread Received -----------------
+    // -------------------------------------------------------- Thread Receiver -----------------
     static class Receiver implements Runnable {
 
-        private FTrapid ftr;
-        private int connection_ticket;
-        private DatagramSocket socket;
-        private ServerChannel channel;
-        private Folder folder;
-        private String file;
-
-        // private final int MAX_NUMBER_THREADS = 5;
-        // private Semaphore mySemaphore = new Semaphore(MAX_NUMBER_THREADS);
+        private FTrapid ftr;                                            // FTR
+        private int connection_ticket;                                  // TOKEN
+        private DatagramSocket socket;                                  // SOCKET
+        private ServerChannel channel;                                  // CHANNEL
+        private Folder folder;                                          // FOLDER
+        private String file;                                            // FILE
 
 
         public Receiver(FTrapid ftr, String file, int ficha) {
             this.ftr = ftr;                                             // FTR
             this.socket = ftr.getChannel().getSocket();                 // SOCKET
             this.channel = ftr.getChannel();                            // CHANNEL
-            this.connection_ticket = ficha;                             // FICHA
+            this.connection_ticket = ficha;                             // TOKEN
             this.folder = ftr.getFolder();                              // FOLDER
             this.file = file;                                           // FILENAME
         }
 
-        public List<DatagramPacket> acceptConexao(FTrapid ftr, String file) throws IOException {
-            //-- Esta função assume que a file pedida tem algum significado e que, portanto, irá funcionar
+        /**
+         * Função responsável por aceitar um PEDIDO READ REQUEST
+         * @param file
+         * @return
+         * @throws IOException
+         */
+        public List<DatagramPacket> acceptConexao(String file) throws IOException {
 
             // List com o conteúdo da file requerida
             List<DatagramPacket> answer_content;
@@ -262,6 +217,8 @@ public class ServerChannel implements Runnable {
 
             // Se não houver nada para enviar, terminar
             if (answer_content.size() == 0){
+                this.ftr.addFailed(this.connection_ticket);
+
                 this.socket.send(Datagrams.ERROR(this.ftr.getIP(), this.connection_ticket, 1));
                 return null;
             }
@@ -299,7 +256,7 @@ public class ServerChannel implements Runnable {
                     // Se receber coisas que são lixo,
                     // não tenho garantia que serão úteis ou não, então deixo o trabalho para alguém que o saiba
                     else {
-
+                        if(!this.ftr.hasFailed(received_ficha) && !this.ftr.isSync(received_ficha))
                         this.channel.resend(ack_receiver);
                     }
                 } catch (SocketTimeoutException e) {
@@ -308,6 +265,8 @@ public class ServerChannel implements Runnable {
                     if (timeouts == 5) {
                         System.out.println("too many timeouts...");
                         this.socket.send(Datagrams.ERROR(this.ftr.getIP(), this.connection_ticket, 1));
+                        this.ftr.addFailed(this.connection_ticket);
+                        System.out.println("thread ["+this.connection_ticket+"] ended");
                         return null;
                         // Os casos em que é retornado NULL são casos para serem ignorados
                     }
@@ -321,6 +280,7 @@ public class ServerChannel implements Runnable {
 
             // THREAD responsável pela transferência
             System.out.println("I'm [R_THREAD] no. [" + this.connection_ticket + "]");
+            int timeout = 0;
 
             // A file pedida é válida, i.e., eu tenho-a?
 
@@ -329,7 +289,7 @@ public class ServerChannel implements Runnable {
 
                 try {
                     // Tento, primeiro, estabelecer ligação e receber a informação que vou enviar
-                    List<DatagramPacket> file_content = this.acceptConexao(this.ftr, file);
+                    List<DatagramPacket> file_content = this.acceptConexao(file);
 
                     // Se a List voltar vazia, é porque não há nada a ser enviado...
                     // Só deve acontecer no caso de não ter ficheiros e tiver sido pedido um #FILENAMES#
@@ -338,7 +298,8 @@ public class ServerChannel implements Runnable {
                         // quem fica à escuta deve receber um erro, para terminar o processo
                         this.socket.send(Datagrams.ERROR(this.ftr.getIP(), this.connection_ticket, 1));
                         System.out.println("error: não há informação para enviar...");
-
+                        this.ftr.addFailed(this.connection_ticket);
+                        System.out.println("thread ["+this.connection_ticket+"] ended");
                         return;
                     }
                     // Se houver informação para ser enviada, proceder
@@ -375,8 +336,9 @@ public class ServerChannel implements Runnable {
                                         if (currentblock == file_content.size()) {
 
                                             System.out.println("Sent everything from file \"" + this.file + "\"!");
-                                            this.channel.garbageCollector(this.connection_ticket);
+                                            //this.channel.garbageCollector(this.connection_ticket);
                                             // garbage collector?
+                                            System.out.println("thread ["+this.connection_ticket+"] ended");
                                             return;
                                         }
                                         currentblock++;
@@ -384,11 +346,18 @@ public class ServerChannel implements Runnable {
                                     }
                                 }
                                 // Se receber algum packet referente a algum thread AINDA em execução, mantê-lo vivo no universo
-                                else if (!this.ftr.isSync(received_ficha)) {
+                                else if (!this.ftr.hasFailed(received_ficha) && !this.ftr.isSync(received_ficha)) {
                                     this.channel.resend(ack_receiver);
                                 }
                             } catch (SocketTimeoutException e) {
 
+                                timeout++;
+                                if(timeout == 5){
+                                    this.ftr.addFailed(this.connection_ticket);
+                                    System.out.println("too many tmeouts");
+                                    System.out.println("thread ["+this.connection_ticket+"] ended");
+                                    return;
+                                }
                                 // controlo de timeouts?
                                 this.socket.send(file_content.get(currentindex));
                             }
@@ -408,6 +377,7 @@ public class ServerChannel implements Runnable {
                 // ou [ELE] tem a file e posso, portanto, pedi-la
                 try {
                     this.socket.send(Datagrams.ERROR(this.ftr.getIP(), this.connection_ticket, 1));
+                    this.ftr.addFailed(this.connection_ticket);
 
                 } catch (IOException e) {
                     e.printStackTrace();
@@ -417,6 +387,7 @@ public class ServerChannel implements Runnable {
                 getFile.start();
 
                 // terminar esta thread
+                System.out.println("thread ["+this.connection_ticket+"] ended");
                 return;
                 //todo
             }

@@ -8,17 +8,13 @@ import javax.xml.crypto.Data;
 import java.io.IOException;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 public class FTrapid {
 
-    private String folder_path;
     private Folder folder;
     private InetAddress ip;
     private ServerChannel channel;
@@ -29,6 +25,7 @@ public class FTrapid {
 
                 //ficha         file    updated?
     private Map<Integer, Quartet<String, Boolean, Long, Long>> requests_done;
+    private Set<Integer> requests_failed;
 
 
     /**
@@ -36,7 +33,6 @@ public class FTrapid {
      */
     public FTrapid(String path, String ip) throws UnknownHostException, SocketException {
 
-        this.folder_path = path;                                        // folder path
         this.folder = new Folder(path);                                 // folder
         this.ip = InetAddress.getByName(ip);                            // ip from friend
         this.friend_files = new ArrayList<>();
@@ -47,6 +43,8 @@ public class FTrapid {
         this.locker = new ReentrantLock();
 
         this.requests_done = new HashMap<>();
+        this.requests_failed = new HashSet<>();
+
     }
 
     public Map<Integer, Quartet<String,Boolean, Long,Long>> getRequests_done(){
@@ -70,6 +68,17 @@ public class FTrapid {
 
         return this.requests_done.containsKey(ficha);
     }
+
+    boolean isSync(String file, int ficha){
+
+        return this.requests_done.get(ficha).getValue0().equals(file);
+    }
+
+    public boolean hasFailed(int ficha){
+        return this.requests_failed.contains(ficha);
+    }
+
+    public void addFailed(int ficha){this.requests_failed.add(ficha);}
 
 
     /**
@@ -153,21 +162,25 @@ public class FTrapid {
 
             byte[] wrq_buff = new byte[1024];
             DatagramPacket wrq_received = new DatagramPacket(wrq_buff, wrq_buff.length);
+
             int timeout = 0;
-            this.ftr.channel.getSocket().setSoTimeout(3000);
             this.socket.setSoTimeout(3000); // timeout 3 seg
-            System.out.println("set timeout of " + this.socket.getSoTimeout());
 
             while(true){
 
                 // enviar o READ REQUEST
                 this.socket.send(RRQ);
-                System.out.println("sent");
 
                 try{
                     // Receber os packets
                     this.socket.receive(wrq_received);
-                    System.out.println("waitin");
+
+                    if(this.ftr.isSync(this.file)){
+                        this.ftr.addFailed(this.ficha);
+                        return null;
+                    }
+
+                    // ler o tipo de packet
                     int received_opcode = Datagrams.getDatagramOpcode(wrq_received);
                     int received_ficha = Datagrams.getDatagramFicha(wrq_received);
 
@@ -182,23 +195,26 @@ public class FTrapid {
                         return Datagrams.readWRQ(wrq_received);
                     }
 
+                    // Se receber um ERROR, é porque há algum tipo de problema e devo terminar
                     else if(received_opcode == 5 && received_ficha == this.ficha){
 
+                        this.ftr.requests_failed.add(this.ficha);
                         System.out.println("error: received error from ficha "+ficha+" ... terminating connection");
+                        System.out.println("thread ["+this.ficha+"] ended");
                         return null;
                     }
 
-                    // Só me interessa manter o packet vivo SE a ficha dele ainda não tiver completado o tempo vida
-                    else if(!this.ftr.isSync(received_ficha)){
+                    // Só me interessa manter o packet vivo SE a ficha dele ainda não tiver completado o tempo vida e não tiver falhado
+                    else if(!this.ftr.hasFailed(received_ficha) && !this.ftr.isSync(received_ficha)){
                         this.ftr.channel.resend(wrq_received);
                     }
                 } catch (SocketTimeoutException e){
-
 
                     System.out.println("[-timeout-]");
                     timeout++;
                     if(timeout == 2){
                         System.out.println("Too many timeouts...");
+                        System.out.println("thread ["+this.ficha+"] ended");
                         return null;
                     }
                     this.socket.send(RRQ);
@@ -206,10 +222,9 @@ public class FTrapid {
             }
         }
 
-
-
-
-
+        /**
+         * RECEIVER RUN
+         */
         @Override
         public void run() {
 
@@ -222,15 +237,19 @@ public class FTrapid {
 
                 // Se a conexão der NULL, é porque houve algum erro e não vale a pena continuar a conexão
                 if(file_requested == null){
-                    this.ftr.channel.garbageCollector(this.ficha);
+                    this.ftr.requests_failed.add(this.ficha);
+                    //this.ftr.channel.garbageCollector(this.ficha);
+                    System.out.println("thread ["+this.ficha+"] ended");
                     return;
                 }
 
                 // Número de blocos que irei receber
                 int nblocks = file_requested.getValue1();
 
+                // List onde será guardado o conteúdo recebido por transferência
                 List<byte[]> answer = new ArrayList<>();
 
+                // preparação de variáveis para leitura
                 byte[] data_buff = new byte[1024];
                 DatagramPacket data = new DatagramPacket(data_buff, data_buff.length);
                 this.socket.setSoTimeout(3000); // Timeout 3 seg
@@ -243,7 +262,7 @@ public class FTrapid {
                 long start = System.nanoTime();
 
                 while(true){
-
+                    // Se todos os blocos tiverem sido recebidos, terminar
                     if(currentblock == nblocks+1){
 
                         long finish = System.nanoTime();
@@ -269,7 +288,8 @@ public class FTrapid {
                         }
                         System.out.println("Received everything from file \""+this.file+"\"!!");
                         // garbage ??
-                        this.ftr.channel.garbageCollector(this.ficha);
+                        //this.ftr.channel.garbageCollector(this.ficha);
+                        System.out.println("thread ["+this.ficha+"] ended");
                         return;
                     }
 
@@ -288,6 +308,7 @@ public class FTrapid {
                             Triplet<Integer,Integer,byte[]> data_info = Datagrams.readDATA(data);
                             int block = data_info.getValue1();
 
+                            // Se for o bloco que se pretendia receber, update das variáveis
                             if(block == currentblock){
 
                                 ACK = Datagrams.ACK(this.ip, this.ficha, currentblock);
@@ -299,7 +320,7 @@ public class FTrapid {
                             }
                         }
                         // Se a ficha ainda não tiver sido completada, mantê-la viva
-                        else if(!this.ftr.isSync(received_ficha)){
+                        else if(!this.ftr.hasFailed(received_ficha) && !this.ftr.isSync(received_ficha)){
                             this.ftr.channel.resend(data);
                         }
                     } catch (SocketTimeoutException e){
@@ -308,6 +329,7 @@ public class FTrapid {
                         if(timeout == 5){
 
                             System.out.println("Could not receive data for file " + this.file);
+                            System.out.println("thread ["+this.ficha+"] ended");
                             return;
                         }
 
@@ -321,7 +343,8 @@ public class FTrapid {
                                     new Quartet<>(this.file, updated
                                             , milliseconds
                                             , total_bytes));
-                            this.ftr.channel.garbageCollector(this.ficha);
+                            //this.ftr.channel.garbageCollector(this.ficha);
+                            System.out.println("thread ["+this.ficha+"] ended");
                             return;
                         }
                         socket.send(ACK);

@@ -2,7 +2,6 @@ package FFSync;
 
 import org.javatuples.Pair;
 import org.javatuples.Triplet;
-
 import java.net.DatagramPacket;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
@@ -11,7 +10,6 @@ import java.nio.charset.StandardCharsets;
 public class Datagrams {
 
     private static final int PORT = 9999;
-
 
     /**
      *  Criação de um RRQ
@@ -41,7 +39,11 @@ public class Datagrams {
         return new DatagramPacket(data, data.length, ip, PORT);
     }
 
-
+    /**
+     * Leitura de um READ REQUEST
+     * @param rrq
+     * @return Filename and token
+     */
     public static Pair<String, Integer> readRRQ(DatagramPacket rrq){
         //      4           4                    4
         // ( [opcode] [ficha] [filenameSIZE] [filename] [0] )
@@ -62,7 +64,6 @@ public class Datagrams {
         RRQ.get(filename, 0, size);
 
         //System.out.println("RRQ for file " + new String(filename, StandardCharsets.UTF_8));
-
         return new Pair<String,Integer>(new String(filename, StandardCharsets.UTF_8), ficha);
     }
 
@@ -101,7 +102,7 @@ public class Datagrams {
     /**
      * Leitura WRITE REQUEST
      * @param wrq
-     * @return
+     * @return Token, Number of blocks, Filename
      */
     public static Triplet<Integer,Integer,String> readWRQ(DatagramPacket wrq){
         //      4        4        4         4                  4
@@ -161,7 +162,7 @@ public class Datagrams {
     /**
      * Leitura DATA
      * @param packet
-     * @return
+     * @return Token, Block number, Data
      */
     public static Triplet<Integer, Integer, byte[]> readDATA(DatagramPacket packet){
         //      4       4       4           4
@@ -187,7 +188,7 @@ public class Datagrams {
 
 
     /**
-     * Criação DATA
+     * Criação ACK
      * @param ip
      * @param ficha
      * @param block
@@ -212,7 +213,7 @@ public class Datagrams {
     /**
      * Leitura ACK
      * @param packet
-     * @return
+     * @return Token and Block number
      */
     public static Pair<Integer, Integer> readACK(DatagramPacket packet){
         //      4       4        4
@@ -260,7 +261,7 @@ public class Datagrams {
     /**
      * Leitura ERROR
      * @param packet
-     * @return
+     * @return Token and Error code
      */
     public static Pair<Integer,Integer> readERROR(DatagramPacket packet){
         //      4       4        4
@@ -295,8 +296,12 @@ public class Datagrams {
         return bf.getInt();
     }
 
-
-    public static int getDatagramFicha(DatagramPacket packet){
+    /**
+     * Reads a Datagram's TOKEN
+     * @param packet
+     * @return
+     */
+    public static int getDatagramFicha(DatagramPacket packet) {
 
         byte[] aux = packet.getData();
         ByteBuffer bf = ByteBuffer.allocate(8);
@@ -304,6 +309,4 @@ public class Datagrams {
         bf.position(4);
         return bf.getInt();
     }
-
-
 }
