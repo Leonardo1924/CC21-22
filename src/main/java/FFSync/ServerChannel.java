@@ -2,6 +2,7 @@ package FFSync;
 
 import org.javatuples.Pair;
 
+import javax.xml.crypto.Data;
 import java.io.IOException;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
@@ -12,20 +13,44 @@ import java.util.Map;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
-public class ServerChannel implements Runnable{
+public class ServerChannel implements Runnable {
 
     // ----------------------------------------------------------------------
-        private InetAddress ip;                 // ip para onde irei enviar info
-        private final static int PORT = 8080;   // porta onde estou à escuta
-        private DatagramSocket socket;          // Socket de comunicação
-        private Folder folder;
-        private FTrapid ftr;
+    private InetAddress ip;                 // ip para onde irei enviar info
+    private final static int PORT = 8080;   // porta onde estou à escuta
+    private DatagramSocket socket;          // Socket de comunicação
+    private Folder folder;
+    private FTrapid ftr;
     // ----------------------------------------------------------------------
 
     // ----------------------------------------------------------------------
 
-        private Map<String, Integer> current_threads;
+    private Map<String, Integer> current_threads;       // file, ficha
     // ----------------------------------------------------------------------
+
+
+    public boolean hasThread(int ficha){
+
+        return this.current_threads.containsValue(ficha);
+    }
+
+
+    /**
+     * Returns a list of already requested files
+     *
+     * @return
+     */
+    public List<String> getServerRequestedFiles() {
+
+        List<String> a = new ArrayList<>();
+
+        for (Map.Entry<String, Integer> e : current_threads.entrySet()) {
+
+            if (!e.getKey().equals("#filenames#"))
+                a.add(e.getKey());
+        }
+        return a;
+    }
 
 
     public void resend(DatagramPacket dp) throws IOException {
@@ -34,37 +59,40 @@ public class ServerChannel implements Runnable{
     }
 
 
-    public void garbageCollector(String file, int ficha) throws IOException {
+    public void garbageCollector(int ficha) throws IOException {
 
-        byte[] garbagebuff = new byte[1024];
-        DatagramPacket garbage = new DatagramPacket(garbagebuff, garbagebuff.length);
-        int notGarbage = 0;
-        this.socket.setSoTimeout(2000);
+        // A ideia do Garbage Collector é recolher os packets "lixo" que a rede tem
+        // No ato da transferência há pacotes duplicados que ficam em circulação enquanto ninguém os recolher
 
-        System.out.println("entering garbage collector");
-        if(!this.socket.isClosed())
-            while(true) {
+        byte[] garbage_buff = new byte[1024];
+        DatagramPacket garbage = new DatagramPacket(garbage_buff, garbage_buff.length);
 
-                try {
-                    this.socket.receive(garbage);
-                    int received_ficha = Datagrams.getDatagramFicha(garbage);
+        this.socket.setSoTimeout(3000);
+        int timeouts = 0;
+        System.out.println("started garbage collector for ficha " + ficha);
+        while(true) {
 
-                    if (received_ficha != ficha) {
-                        this.resend(garbage);
-                    }
-                } catch (SocketTimeoutException e) {
+            try {
+                this.socket.receive(garbage);
+                int received_ficha = Datagrams.getDatagramFicha(garbage);
+                if (received_ficha == ficha) {
+                    // garbage
+                }
+                // Se não for lixo, vou querer mantê-lo a circular
+                else if (!this.ftr.isSync(received_ficha)) {
+                    this.ftr.getChannel().resend(garbage);
+                }
+            } catch (SocketTimeoutException e) {
 
-                    System.out.println("timeoutttt");
-                    notGarbage++;
-                    if(notGarbage >= 2)
-                        return;
-
+                timeouts++;
+                // quando não receber nada por 3 ciclos, é provável que já não haja mais lixo
+                if (timeouts == 2) {
+                    System.out.println("left garbage from thread [" + ficha + "]");
+                    return;
                 }
             }
+        }
     }
-
-
-
 
 
     /**
@@ -79,13 +107,18 @@ public class ServerChannel implements Runnable{
         this.current_threads = new HashMap<>();
     }
 
-    public InetAddress getIP(){ return this.ip;}
+    public InetAddress getIP() {
+        return this.ip;
+    }
 
     /**
      * Returns server's socket
+     *
      * @return
      */
-    public DatagramSocket getSocket(){ return this.socket;}
+    public DatagramSocket getSocket() {
+        return this.socket;
+    }
 
 
     public void sendMessage(String msg) throws IOException {
@@ -98,75 +131,95 @@ public class ServerChannel implements Runnable{
 
 
     public void run() {
-
+        // O servidor vai apanhar packets de, no máximo, 1024 bytes
         byte[] receivingbuff = new byte[1024];
         DatagramPacket receivingPacket = new DatagramPacket(receivingbuff, receivingbuff.length);
+        try {
+            this.socket.setSoTimeout(1000);
+        } catch (SocketException e) {
+            e.printStackTrace();
+        }
 
-
-        while(true){
+        while (true) {
 
             try {
-                // Receber os datagramas
-                this.socket.receive(receivingPacket);
-                // Ler o OPCODE recebido
+
+                // Receber packets
+                socket.receive(receivingPacket);
                 int received_opcode = Datagrams.getDatagramOpcode(receivingPacket);
+                int received_ficha = Datagrams.getDatagramFicha(receivingPacket);
 
-                // Se for um READ REQUEST, tratá-lo
-                if(received_opcode == 1){
-                    System.out.println("[opcode 1]");
 
-                    Pair<String, Integer> file_requested = Datagrams.readRRQ(receivingPacket);
-                    System.out.println("requested ["+file_requested.getValue0()+"], ficha ["+file_requested.getValue1()+"]");
+                if (received_opcode == 1) {                  // Se for recebido um READ REQUEST [1]
+                    // ( [opcode] [ficha] [filenameSIZE] [filename] [0] )
 
-                    if(!file_requested.getValue0().equals("#filenames#") && !this.folder.fileExists(file_requested.getValue0())
-                            && !this.current_threads.containsKey(file_requested.getValue0())){
+                    // Info do RRQ
+                    Pair<String, Integer> rrqInfo = Datagrams.readRRQ(receivingPacket);
+                    String file = rrqInfo.getValue0();
+                    int ficha = rrqInfo.getValue1();
 
-                        System.out.println("file does not exist");
-                        this.current_threads.put(file_requested.getValue0(), file_requested.getValue1());
-                        //this.socket.send(Datagrams.ERROR(this.ip, file_requested.getValue1(), 1));
-                        // caso em que eu não tenho a file pedida
-                        Thread save = new Thread(new FTrapid.Sender(this.ftr, file_requested.getValue0()));
-                        save.start();
-                    }
+                    // Se for um NOVO pedido,
+                    if (!this.current_threads.containsValue(received_ficha)) {
 
-                    else if(!this.current_threads.containsKey(file_requested.getValue0())) {
+                        // Pedido #FILENAMES#
 
-                        if(!file_requested.getValue0().equals("#filenames#"))
-                            this.current_threads.put(file_requested.getValue0(), file_requested.getValue1()); // adicionar às threads em run
+                        if (file.equals("#filenames#")) {
+                            this.current_threads.put(file, ficha);
+
+                            Thread filenames_request = new Thread(new Receiver(this.ftr, file, ficha));
+                            filenames_request.start();
+                        }
+                        // Pedido NORMAL
+                        else {
+                            // Se ainda não tiver havido algum pedido sobre a FILE, executá-lo
+                            if(!this.current_threads.containsKey(file)) {
+                                // Atualizar o mapa que faz o registo dos pedidos já efetuados
+                                this.current_threads.put(file, ficha);
+
+                                Thread file_request = new Thread(new Receiver(this.ftr, file, ficha));
+                                file_request.start();
+                            }
+
+                            // Se já tiver sido efetuado um pedido sobre a file, ignorar
+                            else{
+
+                                this.socket.send(Datagrams.ERROR(this.ip, ficha, 1));
+                            }
+                        }
+                        // Para atualizar o número do TICKET em AMBOS OS LADOS
                         this.ftr.getTicket();
-                        System.out.println("[Received RRQ for file \"" + file_requested.getValue0() + "\"");
+                    } else {
 
-                        Receiver r = new Receiver(this.ftr, file_requested.getValue0(), file_requested.getValue1());
-                        Thread receiver = new Thread(r);
-                        receiver.start();
+                        // Se não for um pedido novo,
+                        // só o vou querer "receber" se esse pedido ainda não tiver terminado...
+                        if (!this.ftr.isSync(file)) {
+                            this.resend(receivingPacket);
+                        }
                     }
-                    else if(!file_requested.getValue0().equals("#filenames#")){
+                } else {
 
-                        socket.send(Datagrams.ERROR(this.ip, file_requested.getValue1(), 1));
+                    // Se não for um pedido RRQ,
+                    // só o vou querer receber SE: já há uma thread sobre ele
+                    //                         SE: essa thread ainda não terminou
+
+                    if (this.current_threads.containsValue(received_ficha) && !this.ftr.isSync(received_ficha)) {
+
+                        this.resend(receivingPacket);
                     }
-                    //List<DatagramPacket> content = r.acceptConexao(this.folder, file_requested);
                 }
-                // Se for um DATA, tratá-lo
-                else{
-                    this.resend(receivingPacket);
-                }
-                // Se receber algo que não é um pedido, é porque roubei o packet que alguém precisava.
+            } catch (IOException e) {
 
-            } catch (IOException ignored) {
-
-                if(socket.isClosed()){
+                if(this.socket.isClosed()){
                     return;
                 }
+                //System.out.println("main timeout wtf dude");
             }
-
         }
     }
 
 
-
-
     // -------------------------------------------------------- Thread Received -----------------
-    static class Receiver implements Runnable{
+    static class Receiver implements Runnable {
 
         private FTrapid ftr;
         private int connection_ticket;
@@ -179,158 +232,195 @@ public class ServerChannel implements Runnable{
         // private Semaphore mySemaphore = new Semaphore(MAX_NUMBER_THREADS);
 
 
-        public Receiver(FTrapid ftr, String file, int ficha){
-            this.ftr = ftr;
-            this.socket = ftr.getChannel().getSocket();
-            this.channel = ftr.getChannel();
-            this.connection_ticket = ficha;
-            this.folder = ftr.getFolder();
-            this.file = file;
+        public Receiver(FTrapid ftr, String file, int ficha) {
+            this.ftr = ftr;                                             // FTR
+            this.socket = ftr.getChannel().getSocket();                 // SOCKET
+            this.channel = ftr.getChannel();                            // CHANNEL
+            this.connection_ticket = ficha;                             // FICHA
+            this.folder = ftr.getFolder();                              // FOLDER
+            this.file = file;                                           // FILENAME
         }
-
 
         public List<DatagramPacket> acceptConexao(FTrapid ftr, String file) throws IOException {
-            // esta função já admite que a file pedida existe!
+            //-- Esta função assume que a file pedida tem algum significado e que, portanto, irá funcionar
 
-            List<DatagramPacket> file_content = null;
+            // List com o conteúdo da file requerida
+            List<DatagramPacket> answer_content;
 
-            if(file.equals("#filenames#")){          // código utilizado para saber que só quer enviar as filenames
-                file_content = this.folder.getFilenamesTOSend(this.channel.ip, this.connection_ticket);
+            //-- Há 2 casos de pedidos possíveis:
+
+            // Pedido #FILENAMES#
+            if (file.equals("#filenames#")) {
+                answer_content = this.folder.getFilenamesTOSend(this.ftr.getIP(), this.connection_ticket);
+                System.out.println("i know im here");
+                ;
             }
+            // Pedido Normal File
             else {
-                file_content = folder.getFileContent(this.channel.ip, this.connection_ticket, file);
+                answer_content = this.folder.getFileContent(this.ftr.getIP(), this.connection_ticket, this.file);
             }
 
-            // Para responder a um pedido de conexão, envio um WRITE REQUEST
-            DatagramPacket wrq = Datagrams.WRQ(this.channel.ip, this.connection_ticket, file_content.size(), file);
-            System.out.println("["+this.connection_ticket+" Sending WRQUEST for [" + file_content.size() + "] blocks!");
+            // Se não houver nada para enviar, terminar
+            if (answer_content.size() == 0){
+                this.socket.send(Datagrams.ERROR(this.ftr.getIP(), this.connection_ticket, 1));
+                return null;
+            }
 
-            byte[] aux = new byte[20];
-            DatagramPacket receiving = new DatagramPacket(aux, aux.length);
-            this.socket.setSoTimeout(5000); // 3seg
+            // Para avançar com a transferência, é necessário enviar um WRQ, até receber um ACK 0
+            DatagramPacket wrq = Datagrams.WRQ(this.ftr.getIP(), this.connection_ticket, answer_content.size(), file);
+
+            // Para receber o ACK 0, é preciso preparar um packet para esse efeito
+            byte[] ackBuff = new byte[1024]; // como pode receber "lixo", o tamanho default é preferível
+            DatagramPacket ack_receiver = new DatagramPacket(ackBuff, ackBuff.length);
+
+            this.socket.setSoTimeout(3000); // timeout de 3 seg
             int timeouts = 0;
 
-            while(true){
+            while (true) {
+
+                // Enviar o WRITE REQUEST
                 this.socket.send(wrq);
-               // System.out.println("["+this.connection_ticket+" Sent wrq from acceptConexao");
 
-                try{
-                    this.socket.receive(receiving);
-                    int opcode = Datagrams.getDatagramOpcode(receiving);
-                    //System.out.println("["+this.connection_ticket+" Received something on getconexao : " + opcode);
+                try {
+                    // Receber packets
+                    this.socket.receive(ack_receiver);
+                    int received_opcode = Datagrams.getDatagramOpcode(ack_receiver);
+                    int received_ficha = Datagrams.getDatagramFicha(ack_receiver);
 
-                    // Se receber um ACK e for direcionado a esta ficha,
-                    if(opcode == 4){
+                    // Se for um ACK [opcode 4] e se o ACK for referente a ESTA THREAD,
+                    if (received_opcode == 4 && received_ficha == this.connection_ticket) {
+                        // ( [opcode] [ficha] [block] )
+                        Pair<Integer, Integer> ackInfo = Datagrams.readACK(ack_receiver);
 
-                        Pair<Integer,Integer> ackInfo = Datagrams.readACK(receiving);
-                        System.out.println("["+this.connection_ticket+" opcode 4 : block " + ackInfo.getValue1() + ", ficha " + ackInfo.getValue0());
-
-                        if(ackInfo.getValue0() == this.connection_ticket && ackInfo.getValue1() == 0){
-                            System.out.println("["+this.connection_ticket+" Confirmed ACK 0 from file " + file + ", ticket " + this.connection_ticket);
-                            return file_content;
-                        }
-                        else
-                            this.channel.resend(receiving);
+                        // Só me interessa o ACK 0 (neste ponto também deverá ser impossível receber outro...)
+                        if (ackInfo.getValue1() == 0)
+                            return answer_content;  // recebi o ACK, posso concluir que a conexão foi realizada
                     }
-                }
-                catch (SocketTimeoutException e){
+                    // Se receber coisas que são lixo,
+                    // não tenho garantia que serão úteis ou não, então deixo o trabalho para alguém que o saiba
+                    else {
 
-                    this.socket.send(wrq);
+                        this.channel.resend(ack_receiver);
+                    }
+                } catch (SocketTimeoutException e) {
+
                     timeouts++;
-                    System.out.println("["+this.connection_ticket+" Timeout in acceptConexao");
-                    if(timeouts == 4){
-
-                        System.out.println("["+this.connection_ticket+" Too many timeouts...");
+                    if (timeouts == 5) {
+                        System.out.println("too many timeouts...");
+                        this.socket.send(Datagrams.ERROR(this.ftr.getIP(), this.connection_ticket, 1));
                         return null;
+                        // Os casos em que é retornado NULL são casos para serem ignorados
                     }
+                    this.socket.send(wrq);
                 }
             }
         }
-
 
         @Override
         public void run() {
-            // Esta thread está responsável por tratar toda a transferência
 
-            int timeouts = 0;
+            // THREAD responsável pela transferência
+            System.out.println("I'm [R_THREAD] no. [" + this.connection_ticket + "]");
 
-            System.out.println("I'm [RECEIVER] no. [" + this.connection_ticket + "]");
-            int currentBlock = 1;
+            // A file pedida é válida, i.e., eu tenho-a?
 
-            try {
-                List<DatagramPacket> content = this.acceptConexao(this.ftr, file);
-                System.out.println("Sending d.a.t.a.");
+            // Tenho a file
+            if (this.folder.fileExists(this.file) || this.file.equals("#filenames#")) {
 
-                int current_index = 0;
-                if(content != null && content.size() != 0) {
-                    //System.out.println("["+this.connection_ticket+" Conection has been made!");
+                try {
+                    // Tento, primeiro, estabelecer ligação e receber a informação que vou enviar
+                    List<DatagramPacket> file_content = this.acceptConexao(this.ftr, file);
 
-                    byte[] ackbuff = new byte[1024]; // nunca vai ultrapassar os 4*3 tho...
-                    DatagramPacket ackpacket = new DatagramPacket(ackbuff, ackbuff.length);
-                    socket.setSoTimeout(3000);
+                    // Se a List voltar vazia, é porque não há nada a ser enviado...
+                    // Só deve acontecer no caso de não ter ficheiros e tiver sido pedido um #FILENAMES#
+                    if (file_content == null || file_content.size() == 0) {
 
-                    while(true) {
+                        // quem fica à escuta deve receber um erro, para terminar o processo
+                        this.socket.send(Datagrams.ERROR(this.ftr.getIP(), this.connection_ticket, 1));
+                        System.out.println("error: não há informação para enviar...");
 
-                        if(current_index == content.size()){
-                            System.out.println("["+this.connection_ticket+" Sent everything...");
-                            this.channel.garbageCollector(this.file, this.connection_ticket);
-                            return;
-                        }
+                        return;
+                    }
+                    // Se houver informação para ser enviada, proceder
+                    else {
 
-                        // enviar o packet
-                        socket.send(content.get(current_index));
+                        int currentblock = 1;
+                        int currentindex = 0;
+                        this.socket.setSoTimeout(3000); // timeout 3 seg
+                        byte[] ack_buff = new byte[1024];
+                        DatagramPacket ack_receiver = new DatagramPacket(ack_buff, ack_buff.length);
 
-                        try{
-                            // receber a resposta
-                            socket.receive(ackpacket);
-                            int received_opcode = Datagrams.getDatagramOpcode(ackpacket);
+                        // Enviar os blocos de informação
+                        while (true) {
 
-                            if(received_opcode == 4){
+                            this.socket.send(file_content.get(currentindex));
 
-                                Pair<Integer,Integer> ack_info = Datagrams.readACK(ackpacket);
-                                int ficha = ack_info.getValue0();
-                                int bloco = ack_info.getValue1();
+                            try {
 
-                                if(ficha == this.connection_ticket && bloco == currentBlock){
+                                this.socket.receive(ack_receiver);
+                                int received_opcode = Datagrams.getDatagramOpcode(ack_receiver);
+                                int received_ficha = Datagrams.getDatagramFicha(ack_receiver);
 
-                                    System.out.println("["+this.connection_ticket+" Received ack ficha " + ficha + ", bloco " + bloco + ", current was " + currentBlock);
+                                // Se receber um ACK destinado a este THREAD
+                                if (received_opcode == 4 && received_ficha == this.connection_ticket) {
 
-                                    currentBlock++;
-                                    current_index++;
-                                    if(current_index == content.size()){
-                                        System.out.println("["+this.connection_ticket+" Sent everything...");
-                                       // this.socket.setSoTimeout(0);
-                                        //this.channel.current_threads.remove(this.file);
-                                        this.channel.garbageCollector(this.file, this.connection_ticket);
-                                        return;
+                                    Pair<Integer, Integer> ack_info = Datagrams.readACK(ack_receiver);
+                                    //Pair<Ficha,Block>
+                                    int received_block = ack_info.getValue1();
+
+                                    // Se o bloco recebido for o pretendido, posso continuar a mandar os seguintes
+                                    if (received_block == currentblock) {
+
+                                        // Se recebi o último ACK, posso terminar a transferência
+                                        if (currentblock == file_content.size()) {
+
+                                            System.out.println("Sent everything from file \"" + this.file + "\"!");
+                                            this.channel.garbageCollector(this.connection_ticket);
+                                            // garbage collector?
+                                            return;
+                                        }
+                                        currentblock++;
+                                        currentindex++;
                                     }
-                                    socket.send(content.get(current_index));
                                 }
-                                //else{
-                                //    socket.send(ackpacket);
-                                //}
+                                // Se receber algum packet referente a algum thread AINDA em execução, mantê-lo vivo no universo
+                                else if (!this.ftr.isSync(received_ficha)) {
+                                    this.channel.resend(ack_receiver);
+                                }
+                            } catch (SocketTimeoutException e) {
 
+                                // controlo de timeouts?
+                                this.socket.send(file_content.get(currentindex));
                             }
                         }
-                        catch (SocketTimeoutException e){
-
-                            timeouts++;
-                            System.out.println("["+this.connection_ticket+" Timeout trying to receive acks");
-                            if(current_index == content.size() || timeouts == 6) return;
-                            socket.send(content.get(current_index));
-                        }
                     }
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+
+            // Não tenho a file
+            else {
+
+                // Neste caso, e assumindo a condição de
+                // Só pode ser feito um pedido SE:
+                // ou [EU] tenho a file e posso, portanto, enviá-la
+                // ou [ELE] tem a file e posso, portanto, pedi-la
+                try {
+                    this.socket.send(Datagrams.ERROR(this.ftr.getIP(), this.connection_ticket, 1));
+
+                } catch (IOException e) {
+                    e.printStackTrace();
                 }
 
-            } catch (IOException e) {
-                e.printStackTrace();
+                Thread getFile = new Thread(new FTrapid.Sender(this.ftr, this.file));
+                getFile.start();
+
+                // terminar esta thread
+                return;
+                //todo
             }
+
         }
     }
-    // -------------------------------------------------------- Thread Received -----------------
-
-    //TODO
-
-
-
 }

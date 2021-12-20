@@ -54,6 +54,23 @@ public class FTrapid {
     }
 
 
+    public InetAddress getIP(){ return this.ip;}
+
+    boolean isSync(String file){
+
+        for(Map.Entry<Integer, Quartet<String, Boolean, Long, Long>> e : this.getRequests_done().entrySet()){
+
+            if(e.getValue().getValue0().equals(file))
+                return true;
+        }
+        return false;
+    }
+
+    boolean isSync(int ficha){
+
+        return this.requests_done.containsKey(ficha);
+    }
+
 
     /**
      * Gets a unique ticket
@@ -79,7 +96,10 @@ public class FTrapid {
     public void loadFriendFiles(List<byte[]> files){
 
         for(byte[] b : files){
-            this.friend_files.add(new String(b, StandardCharsets.UTF_8));
+
+            String file = new String(b, StandardCharsets.UTF_8);
+            if(!this.friend_files.contains(file))               //podia ser substituído por um setlist...
+                this.friend_files.add(file);
         }
     }
 
@@ -124,53 +144,63 @@ public class FTrapid {
 
 
         public Triplet<Integer,Integer,String> getConexao(String file) throws IOException {
+            // Esta função admite que a conexão será viável
 
-            // O getConexão tem de enviar um pedido de RRQ e, consoante a resposta recebida, tratá-la.
+            // READ REQUEST
+            DatagramPacket RRQ = Datagrams.RRQ(this.ip, file, this.ficha);
 
-            DatagramPacket RRQ = Datagrams.RRQ(this.ip, file, this.ficha);      // pedido RRQ
+            // A função do getConexão é enviar um RRQ, receber um WRQ e enviar um ACK 0
 
-
-            // enquanto não receber uma resposta, devo continuar a enviá-lo
-            byte[] answerbuff = new byte[1024]; //no max
-            DatagramPacket answerPacket = new DatagramPacket(answerbuff, answerbuff.length);
-            this.socket.setSoTimeout(3000);
+            byte[] wrq_buff = new byte[1024];
+            DatagramPacket wrq_received = new DatagramPacket(wrq_buff, wrq_buff.length);
+            int timeout = 0;
+            this.ftr.channel.getSocket().setSoTimeout(3000);
+            this.socket.setSoTimeout(3000); // timeout 3 seg
+            System.out.println("set timeout of " + this.socket.getSoTimeout());
 
             while(true){
 
-                // enviar o RRQ
+                // enviar o READ REQUEST
                 this.socket.send(RRQ);
+                System.out.println("sent");
 
                 try{
+                    // Receber os packets
+                    this.socket.receive(wrq_received);
+                    System.out.println("waitin");
+                    int received_opcode = Datagrams.getDatagramOpcode(wrq_received);
+                    int received_ficha = Datagrams.getDatagramFicha(wrq_received);
 
-                    // esperar por uma resposta : WRQ, RRQ, ERROR
-                    this.socket.receive(answerPacket);
+                    // Posso receber um WRQ, ou um ERROR
 
-                    int received_opcode = Datagrams.getDatagramOpcode(answerPacket);
-                    int received_ficha = Datagrams.getDatagramFicha(answerPacket);
-                    System.out.println("[opcode "+received_opcode+"], [ficha "+received_ficha+"]");
-
-                    // recebi um WRQ e é para este mesmo pedido
+                    // Se eu receber um WRITE REQUEST, posso assumir que a ligação é segura
                     if(received_opcode == 2 && received_ficha == this.ficha){
 
-                        System.out.println("confirmed wrq for ficha " + received_ficha);
-                        // Se me querem escrever, vou aceitar
                         RRQ = Datagrams.ACK(this.ip, this.ficha, 0);
-                        this.socket.send(RRQ); // this is ack 0
-                        return Datagrams.readWRQ(answerPacket);
+                        this.socket.send(RRQ);
+                        // ( [opcode] [ficha] [nBlocks] [fileSize] [filename] [0] ) WRQ
+                        return Datagrams.readWRQ(wrq_received);
                     }
 
-                    // Se eu receber um RRQ, esse já vai ter outra ficha associada e é o servidor que o vai tratar...
-
-                    // se eu receber um ERROR,
                     else if(received_opcode == 5 && received_ficha == this.ficha){
 
-                        System.out.println("error: received error from your friend");
-                        // o amigo não tinha a file
+                        System.out.println("error: received error from ficha "+ficha+" ... terminating connection");
                         return null;
                     }
-                }
-                catch (SocketTimeoutException e){
 
+                    // Só me interessa manter o packet vivo SE a ficha dele ainda não tiver completado o tempo vida
+                    else if(!this.ftr.isSync(received_ficha)){
+                        this.ftr.channel.resend(wrq_received);
+                    }
+                } catch (SocketTimeoutException e){
+
+
+                    System.out.println("[-timeout-]");
+                    timeout++;
+                    if(timeout == 2){
+                        System.out.println("Too many timeouts...");
+                        return null;
+                    }
                     this.socket.send(RRQ);
                 }
             }
@@ -183,52 +213,53 @@ public class FTrapid {
         @Override
         public void run() {
 
+            int timeout = 0;
+            // A primeira coisa a fazer é enviar um pedido de conexão, um READ REQUEST
+
             try {
-                // Get conection and receive info about transfer
-                Triplet<Integer,Integer,String> wrq_info = this.getConexao(this.file);
-                System.out.println("got out of getconexao");
+                System.out.println("Im [THREAD " + this.ficha + "]");
+                Triplet<Integer,Integer,String> file_requested = this.getConexao(this.file);
 
-                if(wrq_info == null) return;
+                // Se a conexão der NULL, é porque houve algum erro e não vale a pena continuar a conexão
+                if(file_requested == null){
+                    this.ftr.channel.garbageCollector(this.ficha);
+                    return;
+                }
 
-                int nblocks = wrq_info.getValue1();
-                this.ficha = wrq_info.getValue0();
-                this.socket.send(Datagrams.ACK(ip, this.ficha, 0));
-                //System.out.println("get conexao left");
-
-                // receiving datas
-                byte[] databuff = new byte[1024];
-                DatagramPacket datapacket = new DatagramPacket(databuff, databuff.length);
-                DatagramPacket ack = Datagrams.ACK(this.ip, this.ficha, 0);
-                int current_block = 1;
+                // Número de blocos que irei receber
+                int nblocks = file_requested.getValue1();
 
                 List<byte[]> answer = new ArrayList<>();
-                this.socket.setSoTimeout(3000);
+
+                byte[] data_buff = new byte[1024];
+                DatagramPacket data = new DatagramPacket(data_buff, data_buff.length);
+                this.socket.setSoTimeout(3000); // Timeout 3 seg
+                int currentblock = 1;
+
+                // Começar por enviar o 0, para ter a certeza que o amigo recebeu o ACK 0
+                DatagramPacket ACK = Datagrams.ACK(this.ip, this.ficha, 0);
 
                 long total_bytes = 0;
                 long start = System.nanoTime();
 
                 while(true){
 
-                    if(current_block == nblocks+1){
+                    if(currentblock == nblocks+1){
 
-                        socket.send(ack);
-                        System.out.println("Received everything...");
-                        socket.send(ack);
                         long finish = System.nanoTime();
+                        this.socket.send(ACK);
+                        // this.socket.send(ACK)
+                        for(byte[] b : answer) total_bytes += b.length;
 
-                        for(byte[] b : answer){
-
-                            total_bytes += b.length;
-                            System.out.println(new String(b, StandardCharsets.UTF_8));
+                        // Se tiver sido um pedido #FILENAMES#
+                        if(this.file.equals("#filenames#")){
+                            this.ftr.loadFriendFiles(answer);
                         }
 
-                        if(wrq_info.getValue2().equals("#filenames#")){
-
-                            ftr.loadFriendFiles(answer);
-                        }
                         else{
+
                             System.out.println("Updating file...");
-                            boolean updated = this.ftr.folder.updateFile(wrq_info.getValue2(), answer, wrq_info.getValue0(), this.ip);
+                            boolean updated = this.ftr.folder.updateFile(this.file, answer, this.ficha, this.ip);
                             long milliseconds = TimeUnit.NANOSECONDS.toMillis(finish-start);
                             if(milliseconds == 0) milliseconds = (long)1;
                             this.ftr.requests_done.put(this.ficha,
@@ -236,56 +267,69 @@ public class FTrapid {
                                             , milliseconds
                                             , total_bytes));
                         }
-                        this.ftr.channel.garbageCollector(this.file, this.ficha);
+                        System.out.println("Received everything from file \""+this.file+"\"!!");
+                        // garbage ??
+                        this.ftr.channel.garbageCollector(this.ficha);
                         return;
                     }
 
-                    socket.send(ack);
-                    try {
-                        socket.receive(datapacket);
-                        int received_opcode = Datagrams.getDatagramOpcode(datapacket);
+                    // envio de ACK
+                    this.socket.send(ACK);
 
-                        if (received_opcode == 3) {
+                    try{
+                        // Receber os DATA
+                        this.socket.receive(data);
+                        int received_opcode = Datagrams.getDatagramOpcode(data);
+                        int received_ficha = Datagrams.getDatagramFicha(data);
 
-                            Triplet<Integer, Integer, byte[]> data_info = Datagrams.readDATA(datapacket);
+                        // No caso de ser um bloco que estou à espera,
+                        if(received_opcode == 3 && received_ficha == this.ficha){
+                            // ( [opcode] [ficha] [block] [blockSize] [data] ) DATA
+                            Triplet<Integer,Integer,byte[]> data_info = Datagrams.readDATA(data);
+                            int block = data_info.getValue1();
 
-                            int ficha = data_info.getValue0();
-                            int bloco = data_info.getValue1();
-                            System.out.println("[3] ficha ["+ficha+"] bloco ["+bloco+"]");
-                            if (ficha == this.ficha && bloco == current_block) {
+                            if(block == currentblock){
 
+                                ACK = Datagrams.ACK(this.ip, this.ficha, currentblock);
+                                currentblock++;
+                                if(currentblock == nblocks+1){
+                                    this.socket.send(ACK);
+                                }
                                 answer.add(data_info.getValue2());
-                                ack = Datagrams.ACK(this.ip, this.ficha, current_block);
-                                socket.send(ack);
-                                current_block++;
-                            } else {
-                                // se não é o que quero, pode fazer falta a alguém
-                                this.ftr.channel.resend(datapacket);
                             }
                         }
+                        // Se a ficha ainda não tiver sido completada, mantê-la viva
+                        else if(!this.ftr.isSync(received_ficha)){
+                            this.ftr.channel.resend(data);
+                        }
                     } catch (SocketTimeoutException e){
+
+                         timeout++;
+                        if(timeout == 5){
+
+                            System.out.println("Could not receive data for file " + this.file);
+                            return;
+                        }
+
                         System.out.println("Timeout trying to receive data");
-                        if(current_block == nblocks+1) {
+                        if(currentblock == nblocks+1) {
                             long finish = System.nanoTime();
-                            boolean updated = this.ftr.folder.updateFile(wrq_info.getValue2(), answer, wrq_info.getValue0(), this.ip);
-                            this.ftr.channel.garbageCollector(this.file, this.ficha);
-                            Long milliseconds = TimeUnit.NANOSECONDS.toMillis(finish-start);
+                            boolean updated = this.ftr.folder.updateFile(this.file, answer, this.ficha, this.ip);
+                            long milliseconds = TimeUnit.NANOSECONDS.toMillis(finish-start);
+                            if(milliseconds == 0) milliseconds = (long)1;
                             this.ftr.requests_done.put(this.ficha,
                                     new Quartet<>(this.file, updated
                                             , milliseconds
                                             , total_bytes));
+                            this.ftr.channel.garbageCollector(this.ficha);
                             return;
                         }
-                        socket.send(ack);
+                        socket.send(ACK);
                     }
                 }
             } catch (IOException e) {
                 e.printStackTrace();
             }
-
         }
     }
-
-
-
 }

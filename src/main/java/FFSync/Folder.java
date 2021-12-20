@@ -105,6 +105,7 @@ public class Folder {
             currentblock++;
         }
 
+        System.out.println("empacotei " + packets.size());
         return packets;
     }
 

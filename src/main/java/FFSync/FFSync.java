@@ -1,5 +1,6 @@
 package FFSync;
 
+import HTTP.HttpServer;
 import org.javatuples.Pair;
 import org.javatuples.Quartet;
 import org.javatuples.Triplet;
@@ -116,7 +117,9 @@ public class FFSync {
         System.out.println("Starting server...");
         Thread server = new Thread(channel);
         server.start();
-
+        HttpServer http = new HttpServer(ftr);
+        Thread http_thread = new Thread(http);
+        http_thread.start();
 
         FTrapid.Sender sender = null;
         //sender.sendRRQ("diogo.txt");
@@ -136,41 +139,52 @@ public class FFSync {
                 List<String> filenames = ftr.getFolder().getFilenames();
                 int nfiles = filenames.size();
 
-                for(int i = 0; i < nfiles; i+=2){
-                    Thread t1, t2 = null;
-                    t1 = new Thread(new FTrapid.Sender(ftr, filenames.get(i)));
-                    System.out.println("starting thread for file " + filenames.get(i));
-                    if(i+1 < nfiles) {
-                        System.out.println("starting thread for file " + filenames.get(i+1));
-                        t2 = new Thread(new FTrapid.Sender(ftr, filenames.get(i + 1)));
+                Thread[] threads = new Thread[nfiles];
+
+                for(int i = 0; i < nfiles; i++){
+
+                    if(!ftr.isSync(filenames.get(i))) {
+                        Thread t = new Thread(new FTrapid.Sender(ftr, filenames.get(i)));
+                        threads[i] = t;
+                        t.start();
                     }
-                    t1.start();
-                    if(t2 != null)
-                        t2.start();
-                    t1.join();
-                    if(t2 != null)
-                        t2.join();
+                    else{
+                        System.out.println("\""+filenames.get(i)+"\" was already synced");
+                    }
                 }
 
+                for(int i = 0; i < nfiles;i++){
+                    if(threads[i] != null)
+                        threads[i].join();
+                }
 
-
-                /*
-                 -> na teoria, é só criar os threads e começá-los.
-                 -> Ao mesmo tempo, devia esperar que todas terminassem para voltar a mandar algum pedido
-                 -> deveria haver um limite de threads, mas ups (tentar semaphore ?)
-                 -> devia haver controle de versoes/atualizações, i.e., para cada file atualizada, devia guardar esse facto
-                 -> aliás, para cada pedido de SYNC, devia aguardar, antes de voltar a fazer algum SYNC
-                 -> join(), depois aviso, depois continuar
-                 */
            }
 
             else if (command == 2) {
                 // sync one specific file
                 String requested_file = input2.getValue0();
-                Thread syncfile = new Thread(new FTrapid.Sender(ftr, requested_file));
-                syncfile.start();
-                syncfile.join();
-                System.out.println("Command has finished");
+
+                List<String> friend_files = ftr.getFriend_files();
+
+                // Só posso pedir uma file SE eu a tiver, ou, SE eu souber que o friend a tem!
+                if(ftr.getFolder().fileExists(requested_file) || (friend_files != null && friend_files.contains(requested_file))) {
+
+                   if (!ftr.isSync(requested_file) && !ftr.getChannel().getServerRequestedFiles().contains(requested_file)) {
+                        System.out.println("Starting request of " + requested_file);
+                        Thread syncfile = new Thread(new FTrapid.Sender(ftr, requested_file));
+                        syncfile.start();
+                        syncfile.join();
+                        System.out.println("Command has finished");
+                    } else {
+                        System.out.println("That file has already been synced");
+                    }
+                }
+                else if(friend_files == null){
+                    System.out.println("Tu não sabes se o teu amigo tem essa file... -> sync_filenames");
+                }
+                else if(!friend_files.contains(requested_file)){
+                    System.out.println("Nem tu, nem o teu amigo, tem essa file!");
+                }
             }
             else if (command == 3) {
                 // Send my files' names
@@ -195,6 +209,8 @@ public class FFSync {
             else if(command == 5){
 
                 ftr.exit();
+                http.close();
+
                 return;
             }
             else if(command == 6){
@@ -210,7 +226,7 @@ public class FFSync {
                             + "\", needed update? : \"" + e.getValue().getValue1()
                             + "\", ms: " + e.getValue().getValue2()
                             + ", bytes: " + e.getValue().getValue3()
-                            + ", debit: " + (e.getValue().getValue3() * 8)/e.getValue().getValue2() + " bps");
+                            + ", debit: " + (e.getValue().getValue3() * 8)/(e.getValue().getValue2()*0.001) + " bps");
                 }
             }
         }
