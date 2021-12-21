@@ -309,4 +309,26 @@ public class Datagrams {
         bf.position(4);
         return bf.getInt();
     }
+
+    /**
+     * Prepares a simple text message
+     * @param s
+     * @param ip
+     * @return
+     */
+    public static DatagramPacket prepareSimpleMessage(String s, InetAddress ip){
+
+        byte[] msg = s.getBytes(StandardCharsets.UTF_8);
+        ByteBuffer bf = ByteBuffer.allocate(4+msg.length+4);
+        bf.position(0);
+        bf.putInt(msg.length);
+        bf.put(msg);
+
+        byte[] realmsg = bf.array();
+        return new DatagramPacket(realmsg, realmsg.length, ip, PORT);
+    }
+
+
+
+
 }

@@ -15,15 +15,15 @@ import java.util.concurrent.locks.ReentrantLock;
 
 public class FTrapid {
 
-    private Folder folder;
-    private InetAddress ip;
-    private ServerChannel channel;
+    private final Folder folder;
+    private final InetAddress ip;
+    private final ServerChannel channel;
     private List<String> friend_files;
 
     private int ticket;                     // Sistema de tickets
-    private final Lock locker;                    // Lock
+    private final Lock locker;              // Lock
 
-                //ficha         file    updated?
+                //ficha         file    updated?   ms    bytes
     private Map<Integer, Quartet<String, Boolean, Long, Long>> requests_done;
     private Set<Integer> requests_failed;
 
@@ -31,12 +31,12 @@ public class FTrapid {
     /**
      * Constructor
      */
-    public FTrapid(String path, String ip) throws UnknownHostException, SocketException {
+    public FTrapid(String path, String ip, String password) throws UnknownHostException, SocketException {
 
         this.folder = new Folder(path);                                 // folder
         this.ip = InetAddress.getByName(ip);                            // ip from friend
         this.friend_files = new ArrayList<>();
-        this.channel = new ServerChannel(this, this.ip);         // connection channel
+        this.channel = new ServerChannel(this, this.ip, password);         // connection channel
 
 
         this.ticket = 1;
@@ -173,12 +173,12 @@ public class FTrapid {
 
                 try{
                     // Receber os packets
-                    this.socket.receive(wrq_received);
-
                     if(this.ftr.isSync(this.file)){
                         this.ftr.addFailed(this.ficha);
                         return null;
                     }
+
+                    this.socket.receive(wrq_received);
 
                     // ler o tipo de packet
                     int received_opcode = Datagrams.getDatagramOpcode(wrq_received);
@@ -263,6 +263,7 @@ public class FTrapid {
 
                 while(true){
                     // Se todos os blocos tiverem sido recebidos, terminar
+
                     if(currentblock == nblocks+1){
 
                         long finish = System.nanoTime();

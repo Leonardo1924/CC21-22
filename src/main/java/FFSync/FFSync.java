@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 public class FFSync {
 
@@ -53,6 +54,11 @@ public class FFSync {
                         command = 2;
                         filename = s[1];
                     }
+                    else if(s[0].equals("login") && s.length == 2){
+
+                        command = 8;
+                        filename = s[1];
+                    }
                     break;
             }
         }
@@ -64,21 +70,24 @@ public class FFSync {
 
         String path = null;
         String ip = null;
+        String password = null;
 
-        if (args.length == 2) {
+        if (args.length == 3) {
             path = args[0];
             ip = args[1];
             if (!(new File(path).isDirectory())) {
                 System.out.println("Directory does not exist!\n");  //confirm
                 return;
             }
+            password = args[2];
         } else {
             System.out.println("Faltam argumentos referentes ao caminho/ip do servidor");
         }
 
         // Preparação do servidor --------------------------------
-        FTrapid ftr = new FTrapid(path, ip);
+        FTrapid ftr = new FTrapid(path, ip, password);
         ServerChannel channel = ftr.getChannel();
+        boolean isLoggedIn = channel.isLoggedIn();
 
         System.out.println("Starting server...");
         Thread server = new Thread(channel);
@@ -103,75 +112,93 @@ public class FFSync {
             switch(command) {
                 // FULL SYNC
                 case 1:
-                    List<String> filenames = ftr.getFolder().getFilenames();
-                    int nfiles = filenames.size();
+                    if(channel.isLoggedIn()) {
+                        List<String> filenames = ftr.getFolder().getFilenames();
+                        int nfiles = filenames.size();
 
-                    Thread[] threads = new Thread[nfiles];
+                        Thread[] threads = new Thread[nfiles];
 
-                    for (int i = 0; i < nfiles; i++) {
+                        for (int i = 0; i < nfiles; i++) {
 
-                        if (!ftr.isSync(filenames.get(i))) {
-                            Thread t = new Thread(new FTrapid.Sender(ftr, filenames.get(i)));
-                            threads[i] = t;
-                            t.start();
-                        } else {
-                            System.out.println("\"" + filenames.get(i) + "\" was already synced");
+                            if (!ftr.isSync(filenames.get(i))) {
+                                Thread t = new Thread(new FTrapid.Sender(ftr, filenames.get(i)));
+                                threads[i] = t;
+                                t.start();
+                            } else {
+                                System.out.println("\"" + filenames.get(i) + "\" was already synced");
+                            }
+                        }
+
+                        for (int i = 0; i < nfiles; i++) {
+                            if (threads[i] != null)
+                                threads[i].join();
                         }
                     }
-
-                    for (int i = 0; i < nfiles; i++) {
-                        if (threads[i] != null)
-                            threads[i].join();
+                    else{
+                        System.out.println("error: login needed -> login {password}");
                     }
                     break;
 
                 // SYNC SPECIFIC FILE
                 case 2:
+                    if(channel.isLoggedIn()) {
+                        //requested file
+                        String requested_file = input2.getValue0();
 
-                    //requested file
-                    String requested_file = input2.getValue0();
+                        List<String> friend_files = ftr.getFriend_files();
 
-                    List<String> friend_files = ftr.getFriend_files();
+                        // Só posso pedir uma file SE eu a tiver, ou, SE eu souber que o friend a tem!
+                        if (ftr.getFolder().fileExists(requested_file) || (friend_files != null && friend_files.contains(requested_file))) {
 
-                    // Só posso pedir uma file SE eu a tiver, ou, SE eu souber que o friend a tem!
-                    if (ftr.getFolder().fileExists(requested_file) || (friend_files != null && friend_files.contains(requested_file))) {
-
-                        if (!ftr.isSync(requested_file) && !ftr.getChannel().getServerRequestedFiles().contains(requested_file)) {
-                            System.out.println("Starting request of " + requested_file);
-                            Thread syncfile = new Thread(new FTrapid.Sender(ftr, requested_file));
-                            syncfile.start();
-                            syncfile.join();
-                            System.out.println("Command has finished");
-                        } else {
-                            System.out.println("That file has already been synced");
+                            if (!ftr.isSync(requested_file) && !ftr.getChannel().getServerRequestedFiles().contains(requested_file)) {
+                                System.out.println("Starting request of " + requested_file);
+                                Thread syncfile = new Thread(new FTrapid.Sender(ftr, requested_file));
+                                syncfile.start();
+                                syncfile.join();
+                                System.out.println("Command has finished");
+                            } else {
+                                System.out.println("That file has already been synced");
+                            }
+                        } else if (friend_files == null) {
+                            System.out.println("Tu não sabes se o teu amigo tem essa file... -> sync_filenames");
+                        } else if (!friend_files.contains(requested_file)) {
+                            System.out.println("Nem tu, nem o teu amigo, tem essa file!");
                         }
-                    } else if (friend_files == null) {
-                        System.out.println("Tu não sabes se o teu amigo tem essa file... -> sync_filenames");
-                    } else if (!friend_files.contains(requested_file)) {
-                        System.out.println("Nem tu, nem o teu amigo, tem essa file!");
+                    }
+                    else{
+                        System.out.println("error: login needed -> login {password}");
                     }
                     break;
 
                 // SEND FILE'S NAMES
                 case 3:
+                    if(channel.isLoggedIn()) {
+                        // #filenames#
+                        sender = new FTrapid.Sender(ftr, "#filenames#");
+                        Thread senderthread = new Thread(sender);
+                        System.out.println("started thread");
 
-                    // #filenames#
-                    sender = new FTrapid.Sender(ftr, "#filenames#");
-                    Thread senderthread = new Thread(sender);
-                    System.out.println("started thread");
+                        senderthread.start();
+                        senderthread.join();
 
-                    senderthread.start();
-                    senderthread.join();
-
-                    System.out.println("\n\\-----Ended-----/");
+                        System.out.println("\n\\-----Ended-----/");
+                    }
+                    else{
+                        System.out.println("error: login needed -> login {password}");
+                    }
+                    break;
 
                     // Print friend's files
                 case 4:
-
-                    List<String> files = ftr.getFriend_files();
-                    if (files != null)
-                        System.out.println(ftr.getFriend_files());
-                    break;
+                    if(channel.isLoggedIn()){
+                            List<String> files = ftr.getFriend_files();
+                            if (files != null)
+                                System.out.println(ftr.getFriend_files());
+                        }
+                    else{
+                        System.out.println("error: login needed -> login {password}");
+                    }
+                        break;
 
                 // EXIT
                 case 5:
@@ -187,14 +214,35 @@ public class FFSync {
                     break;
 
                 case 7:
+                    if(channel.isLoggedIn()) {
+                        for (Map.Entry<Integer, Quartet<String, Boolean, Long, Long>> e : ftr.getRequests_done().entrySet()) {
 
-                    for (Map.Entry<Integer, Quartet<String, Boolean, Long, Long>> e : ftr.getRequests_done().entrySet()) {
+                            System.out.println("Requested sync for : \"" + e.getValue().getValue0()
+                                    + "\", needed update? : \"" + e.getValue().getValue1()
+                                    + "\", ms: " + e.getValue().getValue2()
+                                    + ", bytes: " + e.getValue().getValue3()
+                                    + ", debit: " + (e.getValue().getValue3() * 8) / (e.getValue().getValue2() * 0.001) + " bps");
+                        }
+                    }
+                    else{
+                        System.out.println("error: login needed -> login {password}");
+                    }
+                    break;
 
-                        System.out.println("Requested sync for : \"" + e.getValue().getValue0()
-                                + "\", needed update? : \"" + e.getValue().getValue1()
-                                + "\", ms: " + e.getValue().getValue2()
-                                + ", bytes: " + e.getValue().getValue3()
-                                + ", debit: " + (e.getValue().getValue3() * 8) / (e.getValue().getValue2() * 0.001) + " bps");
+                case 8:
+                    if(!isLoggedIn) {
+                        String pass = input2.getValue0();
+                        channel.getSocket().send(Datagrams.prepareSimpleMessage(pass, ftr.getIP()));
+                        TimeUnit.SECONDS.sleep(2);
+                        isLoggedIn = channel.isLoggedIn();
+                        if(isLoggedIn){
+                            System.out.println("Login has been made!");
+                        }
+                        // pass que eu acho ser a do meu colega
+
+                    }
+                    else{
+                        System.out.println("error: o login ja foi feito");
                     }
                     break;
                 default:

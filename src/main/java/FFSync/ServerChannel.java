@@ -5,6 +5,7 @@ import org.javatuples.Pair;
 import javax.xml.crypto.Data;
 import java.io.IOException;
 import java.net.*;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -24,19 +25,28 @@ public class ServerChannel implements Runnable {
 
     // ----------------------------------------------------------------------
         private Map<String, Integer> current_threads;      // Threads já iniciadas, Map<Filename, Token>
+        private String password;
+        private boolean isLoggedIn;
     // ----------------------------------------------------------------------
 
 
     /**
      * Constructor
      */
-    public ServerChannel(FTrapid ftr, InetAddress ip) throws SocketException {
+    public ServerChannel(FTrapid ftr, InetAddress ip, String password) throws SocketException {
 
         this.ip = ip;                                   // IP
         this.ftr = ftr;                                 // FTR
         this.socket = new DatagramSocket(PORT);         // SOCKET
         this.current_threads = new HashMap<>();         // CURRENT THREADS
+        this.password = password;
+        this.isLoggedIn = false;
     }
+
+    public boolean isLoggedIn(){
+        return this.isLoggedIn;
+    }
+
 
     /**
      * Returns destination's IP address
@@ -96,69 +106,96 @@ public class ServerChannel implements Runnable {
 
                 // Receber packets
                 socket.receive(receivingPacket);
-                int received_opcode = Datagrams.getDatagramOpcode(receivingPacket);
-                int received_ficha = Datagrams.getDatagramFicha(receivingPacket);
 
-                // Se for recebido um READ REQUEST [1]
-                if (received_opcode == 1) {
-                    // ( [opcode] [ficha] [filenameSIZE] [filename] [0] )
+                if(!isLoggedIn){
 
-                    // Info do RRQ
-                    Pair<String, Integer> rrqInfo = Datagrams.readRRQ(receivingPacket);
-                    String file = rrqInfo.getValue0();
-                    int ficha = rrqInfo.getValue1();
-
-                    // Se for um NOVO pedido,
-                    if (!this.current_threads.containsValue(received_ficha)) {
-
-                        // Pedido #FILENAMES#
-                        if (file.equals("#filenames#")) {
-                            this.current_threads.put(file, ficha);
-
-                            Thread filenames_request = new Thread(new Receiver(this.ftr, file, ficha));
-                            filenames_request.start();
-                        }
-
-                        // Pedido NORMAL
-                        else {
-                            // Se ainda não tiver havido algum pedido sobre a FILE, executá-lo
-                            if(!this.current_threads.containsKey(file)) {
-
-                                // Se a file não existir, cortar logo a tentativa de transferência
-                                // Se a file existir, proceder
-                                // Atualizar o mapa que faz o registo dos pedidos já efetuados
-                                this.current_threads.put(file, ficha);
-
-                                Thread file_request = new Thread(new Receiver(this.ftr, file, ficha));
-                                file_request.start();
-                            }
-
-                            // Se já tiver sido efetuado um pedido sobre a file, ignorar
-                            else{
-                                this.socket.send(Datagrams.ERROR(this.ip, ficha, 1));
-                            }
-                        }
-
-                        // Para atualizar o número do TICKET em AMBOS OS LADOS
-                        this.ftr.getTicket();
+                    int received_opcode = Datagrams.getDatagramOpcode(receivingPacket);
+                    if(received_opcode == 4){
+                        int received_ficha = Datagrams.getDatagramFicha(receivingPacket);
+                        if(received_ficha == -1)
+                            this.isLoggedIn = true;
                     }
-                    else {
 
-                        // Se não for um pedido novo,
-                        // só o vou querer "receber" se esse pedido ainda não tiver terminado...
-                        if (!this.ftr.hasFailed(ficha) && !this.ftr.isSync(file)) {
-                            this.resend(receivingPacket);
+                    if(!this.isLoggedIn) {
+                        ByteBuffer bf = ByteBuffer.allocate(receivingPacket.getData().length);
+                        bf.put(receivingPacket.getData());
+                        bf.position(0);
+                        int size = bf.getInt();
+                        byte[] msg = new byte[size];
+                        bf.get(msg, 0, size);
+                        String pass_try = new String(msg, StandardCharsets.UTF_8);
+
+                        if (pass_try.equals(this.password)) {
+                            isLoggedIn = true;
+                            System.out.println("Login was made");
+                            this.socket.send(Datagrams.ACK(this.ip, -1, -1));
                         }
                     }
                 }
+
                 else {
+                    int received_opcode = Datagrams.getDatagramOpcode(receivingPacket);
+                    int received_ficha = Datagrams.getDatagramFicha(receivingPacket);
 
-                    // Se não for um pedido RRQ,
-                    // só o vou querer receber SE: Ele não registou erro
-                    //                         SE: essa thread ainda não terminou
+                    // Se for recebido um READ REQUEST [1]
+                    if (received_opcode == 1) {
+                        // ( [opcode] [ficha] [filenameSIZE] [filename] [0] )
 
-                    if (!this.ftr.hasFailed(received_ficha) && !this.ftr.isSync(received_ficha)) {
-                        this.resend(receivingPacket);
+                        // Info do RRQ
+                        Pair<String, Integer> rrqInfo = Datagrams.readRRQ(receivingPacket);
+                        String file = rrqInfo.getValue0();
+                        int ficha = rrqInfo.getValue1();
+
+                        // Se for um NOVO pedido,
+                        if (!this.current_threads.containsValue(received_ficha)) {
+
+                            // Pedido #FILENAMES#
+                            if (file.equals("#filenames#")) {
+                                this.current_threads.put(file, ficha);
+
+                                Thread filenames_request = new Thread(new Receiver(this.ftr, file, ficha));
+                                filenames_request.start();
+                            }
+
+                            // Pedido NORMAL
+                            else {
+                                // Se ainda não tiver havido algum pedido sobre a FILE, executá-lo
+                                if (!this.current_threads.containsKey(file)) {
+
+                                    // Se a file não existir, cortar logo a tentativa de transferência
+                                    // Se a file existir, proceder
+                                    // Atualizar o mapa que faz o registo dos pedidos já efetuados
+                                    this.current_threads.put(file, ficha);
+
+                                    Thread file_request = new Thread(new Receiver(this.ftr, file, ficha));
+                                    file_request.start();
+                                }
+
+                                // Se já tiver sido efetuado um pedido sobre a file, ignorar
+                                else {
+                                    this.socket.send(Datagrams.ERROR(this.ip, ficha, 1));
+                                }
+                            }
+
+                            // Para atualizar o número do TICKET em AMBOS OS LADOS
+                            this.ftr.getTicket();
+                        } else {
+
+                            // Se não for um pedido novo,
+                            // só o vou querer "receber" se esse pedido ainda não tiver terminado...
+                            if (!this.ftr.hasFailed(ficha) && !this.ftr.isSync(file)) {
+                                this.resend(receivingPacket);
+                            }
+                        }
+                    } else {
+
+                        // Se não for um pedido RRQ,
+                        // só o vou querer receber SE: Ele não registou erro
+                        //                         SE: essa thread ainda não terminou
+
+                        if (!this.ftr.hasFailed(received_ficha) && !this.ftr.isSync(received_ficha)) {
+                            this.resend(receivingPacket);
+                        }
                     }
                 }
             } catch (IOException e) {
@@ -207,8 +244,6 @@ public class ServerChannel implements Runnable {
             // Pedido #FILENAMES#
             if (file.equals("#filenames#")) {
                 answer_content = this.folder.getFilenamesTOSend(this.ftr.getIP(), this.connection_ticket);
-                System.out.println("i know im here");
-                ;
             }
             // Pedido Normal File
             else {
@@ -314,6 +349,11 @@ public class ServerChannel implements Runnable {
                         // Enviar os blocos de informação
                         while (true) {
 
+                            if(this.ftr.isSync(this.file)) {
+                                this.ftr.addFailed(this.connection_ticket);
+                                return;
+                            }
+
                             this.socket.send(file_content.get(currentindex));
 
                             try {
@@ -364,7 +404,7 @@ public class ServerChannel implements Runnable {
                         }
                     }
                 } catch (IOException e) {
-                    e.printStackTrace();
+                    this.socket.isClosed();
                 }
             }
 
