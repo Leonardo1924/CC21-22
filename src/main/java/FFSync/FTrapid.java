@@ -47,6 +47,7 @@ public class FTrapid {
 
     }
 
+
     public Map<Integer, Quartet<String,Boolean, Long,Long>> getRequests_done(){
         return new HashMap<>(this.requests_done);
     }
@@ -262,6 +263,7 @@ public class FTrapid {
                 long start = System.nanoTime();
 
                 while(true){
+
                     // Se todos os blocos tiverem sido recebidos, terminar
 
                     if(currentblock == nblocks+1){
@@ -302,6 +304,7 @@ public class FTrapid {
                         this.socket.receive(data);
                         int received_opcode = Datagrams.getDatagramOpcode(data);
                         int received_ficha = Datagrams.getDatagramFicha(data);
+
 
                         // No caso de ser um bloco que estou à espera,
                         if(received_opcode == 3 && received_ficha == this.ficha){

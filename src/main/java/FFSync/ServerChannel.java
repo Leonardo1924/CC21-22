@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -155,6 +156,7 @@ public class ServerChannel implements Runnable {
 
                                 Thread filenames_request = new Thread(new Receiver(this.ftr, file, ficha));
                                 filenames_request.start();
+                                this.ftr.getTicket();
                             }
 
                             // Pedido NORMAL
@@ -169,6 +171,8 @@ public class ServerChannel implements Runnable {
 
                                     Thread file_request = new Thread(new Receiver(this.ftr, file, ficha));
                                     file_request.start();
+                                    // Para atualizar o número do TICKET em AMBOS OS LADOS
+                                    this.ftr.getTicket();
                                 }
 
                                 // Se já tiver sido efetuado um pedido sobre a file, ignorar
@@ -177,8 +181,6 @@ public class ServerChannel implements Runnable {
                                 }
                             }
 
-                            // Para atualizar o número do TICKET em AMBOS OS LADOS
-                            this.ftr.getTicket();
                         } else {
 
                             // Se não for um pedido novo,
@@ -269,6 +271,11 @@ public class ServerChannel implements Runnable {
             int timeouts = 0;
 
             while (true) {
+
+                if(this.ftr.isSync(this.file)) {
+                                this.ftr.addFailed(this.connection_ticket);
+                                return null;
+                            }
 
                 // Enviar o WRITE REQUEST
                 this.socket.send(wrq);
@@ -423,6 +430,11 @@ public class ServerChannel implements Runnable {
                     e.printStackTrace();
                 }
 
+                try {
+                    TimeUnit.SECONDS.sleep(1);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
                 Thread getFile = new Thread(new FTrapid.Sender(this.ftr, this.file));
                 getFile.start();
 
