@@ -308,7 +308,7 @@ public class ServerChannel implements Runnable {
                         System.out.println("too many timeouts...");
                         this.socket.send(Datagrams.ERROR(this.ftr.getIP(), this.connection_ticket, 1));
                         this.ftr.addFailed(this.connection_ticket);
-                        System.out.println("thread ["+this.connection_ticket+"] ended");
+                        //System.out.println("thread ["+this.connection_ticket+"] ended");
                         return null;
                         // Os casos em que é retornado NULL são casos para serem ignorados
                     }
@@ -321,7 +321,7 @@ public class ServerChannel implements Runnable {
         public void run() {
 
             // THREAD responsável pela transferência
-            System.out.println("I'm [R_THREAD] no. [" + this.connection_ticket + "]");
+            //System.out.println("I'm [R_THREAD] no. [" + this.connection_ticket + "]");
             int timeout = 0;
 
             // A file pedida é válida, i.e., eu tenho-a?
@@ -341,7 +341,7 @@ public class ServerChannel implements Runnable {
                         this.socket.send(Datagrams.ERROR(this.ftr.getIP(), this.connection_ticket, 1));
                         System.out.println("error: não há informação para enviar...");
                         this.ftr.addFailed(this.connection_ticket);
-                        System.out.println("thread ["+this.connection_ticket+"] ended");
+                        //System.out.println("thread ["+this.connection_ticket+"] ended");
                         return;
                     }
                     // Se houver informação para ser enviada, proceder
@@ -385,7 +385,7 @@ public class ServerChannel implements Runnable {
                                             System.out.println("Sent everything from file \"" + this.file + "\"!");
                                             //this.channel.garbageCollector(this.connection_ticket);
                                             // garbage collector?
-                                            System.out.println("thread ["+this.connection_ticket+"] ended");
+                                            //System.out.println("thread ["+this.connection_ticket+"] ended");
                                             return;
                                         }
                                         currentblock++;
@@ -402,7 +402,7 @@ public class ServerChannel implements Runnable {
                                 if(timeout == 5){
                                     this.ftr.addFailed(this.connection_ticket);
                                     System.out.println("too many tmeouts");
-                                    System.out.println("thread ["+this.connection_ticket+"] ended");
+                                    //System.out.println("thread ["+this.connection_ticket+"] ended");
                                     return;
                                 }
                                 // controlo de timeouts?
@@ -439,7 +439,7 @@ public class ServerChannel implements Runnable {
                 getFile.start();
 
                 // terminar esta thread
-                System.out.println("thread ["+this.connection_ticket+"] ended");
+                //System.out.println("thread ["+this.connection_ticket+"] ended");
                 return;
                 //todo
             }

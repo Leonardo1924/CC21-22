@@ -55,7 +55,7 @@ public class FTrapid {
 
     public InetAddress getIP(){ return this.ip;}
 
-    boolean isSync(String file){
+    public boolean isSync(String file){
 
         for(Map.Entry<Integer, Quartet<String, Boolean, Long, Long>> e : this.getRequests_done().entrySet()){
 
@@ -134,7 +134,7 @@ public class FTrapid {
 
 
 
-    static class Sender implements Runnable{
+    public static class Sender implements Runnable{
 
         private FTrapid ftr;
         private DatagramSocket socket;
@@ -200,8 +200,8 @@ public class FTrapid {
                     else if(received_opcode == 5 && received_ficha == this.ficha){
 
                         this.ftr.requests_failed.add(this.ficha);
-                        System.out.println("error: received error from ficha "+ficha+" ... terminating connection");
-                        System.out.println("thread ["+this.ficha+"] ended");
+                        //System.out.println("error: received error from ficha "+ficha+" ... terminating connection");
+                        //System.out.println("thread ["+this.ficha+"] ended");
                         return null;
                     }
 
@@ -215,7 +215,7 @@ public class FTrapid {
                     timeout++;
                     if(timeout == 2){
                         System.out.println("Too many timeouts...");
-                        System.out.println("thread ["+this.ficha+"] ended");
+                        //System.out.println("thread ["+this.ficha+"] ended");
                         return null;
                     }
                     this.socket.send(RRQ);
@@ -233,14 +233,14 @@ public class FTrapid {
             // A primeira coisa a fazer é enviar um pedido de conexão, um READ REQUEST
 
             try {
-                System.out.println("Im [THREAD " + this.ficha + "]");
+                //System.out.println("Im [THREAD " + this.ficha + "]");
                 Triplet<Integer,Integer,String> file_requested = this.getConexao(this.file);
 
                 // Se a conexão der NULL, é porque houve algum erro e não vale a pena continuar a conexão
                 if(file_requested == null){
                     this.ftr.requests_failed.add(this.ficha);
                     //this.ftr.channel.garbageCollector(this.ficha);
-                    System.out.println("thread ["+this.ficha+"] ended");
+                    //System.out.println("thread ["+this.ficha+"] ended");
                     return;
                 }
 
@@ -270,7 +270,7 @@ public class FTrapid {
 
                         long finish = System.nanoTime();
                         this.socket.send(ACK);
-                        // this.socket.send(ACK)
+                        this.socket.send(ACK);
                         for(byte[] b : answer) total_bytes += b.length;
 
                         // Se tiver sido um pedido #FILENAMES#
@@ -292,7 +292,7 @@ public class FTrapid {
                         System.out.println("Received everything from file \""+this.file+"\"!!");
                         // garbage ??
                         //this.ftr.channel.garbageCollector(this.ficha);
-                        System.out.println("thread ["+this.ficha+"] ended");
+                        //System.out.println("thread ["+this.ficha+"] ended");
                         return;
                     }
 
@@ -333,7 +333,7 @@ public class FTrapid {
                         if(timeout == 5){
 
                             System.out.println("Could not receive data for file " + this.file);
-                            System.out.println("thread ["+this.ficha+"] ended");
+                            //System.out.println("thread ["+this.ficha+"] ended");
                             return;
                         }
 
@@ -348,7 +348,7 @@ public class FTrapid {
                                             , milliseconds
                                             , total_bytes));
                             //this.ftr.channel.garbageCollector(this.ficha);
-                            System.out.println("thread ["+this.ficha+"] ended");
+                           // System.out.println("thread ["+this.ficha+"] ended");
                             return;
                         }
                         socket.send(ACK);

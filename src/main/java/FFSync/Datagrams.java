@@ -123,7 +123,7 @@ public class Datagrams {
         int size = WRQ.getInt(); // filenameSize
 
         byte[] filename = new byte[size];
-        System.out.println("Ficha " + ficha + ", pos: " + WRQ.position() + ", size : " + size);
+        //System.out.println("Ficha " + ficha + ", pos: " + WRQ.position() + ", size : " + size);
         WRQ.get(filename, 0, filename.length);
 
         //System.out.println("WRQ for Ficha " + ficha + ", with nBlocks " + nBlocks + ", for file " + new String(filename, StandardCharsets.UTF_8));

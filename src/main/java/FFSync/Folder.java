@@ -124,7 +124,7 @@ public class Folder {
 
         // Conteúdo da file
         byte[] content = Files.readAllBytes(Path.of(filepath));
-        System.out.println("file has " + content.length + " bytes");
+        //System.out.println("file has " + content.length + " bytes");
 
         // ByteBuffer
         ByteBuffer auxBuffer = ByteBuffer.allocate(content.length);
