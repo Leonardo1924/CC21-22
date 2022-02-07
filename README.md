@@ -2,9 +2,11 @@
 Guiões relativos a cadeira de Comunicação por Computadores
 
 Classificação do projeto: 12.6/20
+<div>
 TP1 -> 17
 TP2 -> 10.7
 TP3 -> 17
+</div>
 
 [Diogo Araújo](https://github.com/DMdSA)
 
